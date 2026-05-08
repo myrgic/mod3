@@ -1403,7 +1403,10 @@ def await_voice_input(timeout_sec: float = 180.0) -> str:
     import sqlite3 as _sqlite3
 
     _sw_db = os.path.expanduser("~/Library/Application Support/SuperWhisper/database/superwhisper.sqlite")
-    _rec_dir = os.path.expanduser("~/Documents/superwhisper/recordings")
+    _rec_dir = os.environ.get(
+        "MOD3_SUPERWHISPER_RECORDINGS_DIR",
+        os.path.expanduser("~/Documents/superwhisper/recordings"),
+    )
 
     event = _bargein_registry.wait_for_event("user_speaking_end", timeout=timeout_sec)
     if event is None:

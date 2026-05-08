@@ -7,7 +7,7 @@
 - **FastAPI lifespan migration** (`http_api.py`) — replaced all `@app.on_event("startup")` / `@app.on_event("shutdown")` decorators with a single `@asynccontextmanager` lifespan passed to `FastAPI(lifespan=...)`. Startup order: Kokoro warmup thread, kernel-bus bridge, CogOS agent bridge. Shutdown order: reverse. Eliminates the DeprecationWarning emitted on every boot.
 =======
 ### Deprecated
-- **stdio MCP transport (Phase 1 soft deprecation)** — `python server.py` (no args), `--all`, and `--channel` now emit a `DeprecationWarning` to stderr at boot. The stdio path remains fully functional; no behavior has changed. CLI `--help` text for `--all` and `--channel` now notes the deprecation. README updated to present HTTP-MCP (`python server.py --http`, connect via `/mcp`) as the canonical transport. Tracked in [#11](https://github.com/cogos-dev/mod3/issues/11); Phases 2–4 (flip default, retire `mcp_shim.py`, remove stdio) are separate future PRs.
+- **stdio MCP transport (Phase 1 soft deprecation)** — `python server.py` (no args), `--all`, and `--channel` now emit a `DeprecationWarning` to stderr at boot. The stdio path remains fully functional; no behavior has changed. CLI `--help` text for `--all` and `--channel` now notes the deprecation. README updated to present HTTP-MCP (`python server.py --http`, connect via `/mcp`) as the canonical transport. Tracked in [#11](https://github.com/myrgic/mod3/issues/11); Phases 2–4 (flip default, retire `mcp_shim.py`, remove stdio) are separate future PRs.
 >>>>>>> b5ac054 (feat(deprecation): stdio MCP transport — Phase 1 soft deprecation)
 
 ## [0.4.0] - 2026-04-19
@@ -49,7 +49,7 @@
 - gpt-5.4 (peer review, 3 passes)
 
 ### Notes on versioning
-This release jumps from `v0.1.0` to `v0.4.0`. An earlier `v0.2.0` tag exists from before the cogos-dev org transition (no GitHub release was created). `v0.3.0` was bumped in `pyproject.toml` and added to the CHANGELOG but never tagged. `v0.4.0` captures everything since the last released version (`v0.1.0`).
+This release jumps from `v0.1.0` to `v0.4.0`. An earlier `v0.2.0` tag exists from before the org rename (no GitHub release was created). `v0.3.0` was bumped in `pyproject.toml` and added to the CHANGELOG but never tagged. `v0.4.0` captures everything since the last released version (`v0.1.0`).
 
 ## [0.3.0] - 2026-04-04
 

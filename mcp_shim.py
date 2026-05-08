@@ -565,7 +565,10 @@ def tool_set_output_device(device: str = "") -> str:
 
 def tool_await_voice_input(timeout_sec: float = 180.0) -> str:
     """Block until SuperWhisper recording finishes (local only)."""
-    _rec_dir = os.path.expanduser("~/Documents/superwhisper/recordings")
+    _rec_dir = os.environ.get(
+        "MOD3_SUPERWHISPER_RECORDINGS_DIR",
+        os.path.expanduser("~/Documents/superwhisper/recordings"),
+    )
 
     start = time.time()
     while time.time() - start < timeout_sec:
