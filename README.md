@@ -1,6 +1,6 @@
 # Mod³ — Model Modality Modulator
 
-[![CI](https://github.com/cogos-dev/mod3/actions/workflows/ci.yml/badge.svg)](https://github.com/cogos-dev/mod3/actions/workflows/ci.yml)
+[![CI](https://github.com/myrgic/mod3/actions/workflows/ci.yml/badge.svg)](https://github.com/myrgic/mod3/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 
@@ -32,7 +32,7 @@ Models are downloaded on first use via HuggingFace Hub.
 ## Quick Start
 
 ```bash
-git clone https://github.com/cogos-dev/mod3.git
+git clone https://github.com/myrgic/mod3.git
 cd mod3
 ./setup.sh
 ```
@@ -61,7 +61,7 @@ Then point your MCP client at the HTTP-MCP endpoint:
 
 ### stdio MCP (deprecated)
 
-> **Deprecated.** stdio MCP is still functional but is being phased out. Each client session spawns a new mod3 process, which means TTS engines cold-start on every connection (~60s for Kokoro) and state is not shared across sessions. Prefer HTTP-MCP above. A `DeprecationWarning` is printed to stderr at boot when this path is active. Removal is tracked in [issue #11](https://github.com/cogos-dev/mod3/issues/11).
+> **Deprecated.** stdio MCP is still functional but is being phased out. Each client session spawns a new mod3 process, which means TTS engines cold-start on every connection (~60s for Kokoro) and state is not shared across sessions. Prefer HTTP-MCP above. A `DeprecationWarning` is printed to stderr at boot when this path is active. Removal is tracked in [issue #11](https://github.com/myrgic/mod3/issues/11).
 
 For users who have not migrated yet, the stdio path remains available. Add to your project's `.mcp.json`:
 
@@ -136,16 +136,16 @@ Voice carries the ephemeral (context, intent, tone). Text carries the persistent
 
 ## Ecosystem
 
-Mod³ is the voice layer in the [CogOS](https://github.com/cogos-dev/cogos) ecosystem. It integrates as a modality channel -- the kernel routes intents to Mod³ when voice output is appropriate. Works standalone without CogOS.
+Mod³ is the voice layer in the [CogOS](https://github.com/myrgic/cogos) ecosystem. It integrates as a modality channel -- the kernel routes intents to Mod³ when voice output is appropriate. Works standalone without CogOS.
 
 | Repo | Purpose |
 |------|---------|
-| [cogos](https://github.com/cogos-dev/cogos) | The daemon |
+| [cogos](https://github.com/myrgic/cogos) | The daemon |
 | **mod3** | **Voice -- this repo** |
-| [constellation](https://github.com/cogos-dev/constellation) | Distributed identity and trust |
-| [skills](https://github.com/cogos-dev/skills) | Agent skill library |
-| [charts](https://github.com/cogos-dev/charts) | Helm charts for deployment |
-| [desktop](https://github.com/cogos-dev/desktop) | macOS dashboard app |
+| [constellation](https://github.com/myrgic/constellation) | Distributed identity and trust |
+| [skills](https://github.com/myrgic/skills) | Agent skill library |
+| [charts](https://github.com/myrgic/charts) | Helm charts for deployment |
+| [desktop](https://github.com/myrgic/desktop) | macOS dashboard app |
 
 ## License
 

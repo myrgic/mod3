@@ -5,7 +5,7 @@ Thanks for your interest in Mod³. This document covers local development, testi
 ## Development setup
 
 ```sh
-git clone https://github.com/cogos-dev/mod3.git
+git clone https://github.com/myrgic/mod3.git
 cd mod3
 python3.12 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
@@ -46,7 +46,7 @@ Commit messages: conventional-commit style (`feat:`, `fix:`, `chore:`, etc.) is 
 
 ## Reporting issues
 
-Use the org-level [Bug Report](https://github.com/cogos-dev/mod3/issues/new?template=bug.yml) or [Feature Request](https://github.com/cogos-dev/mod3/issues/new?template=feature.yml) forms.
+Use the org-level [Bug Report](https://github.com/myrgic/mod3/issues/new?template=bug.yml) or [Feature Request](https://github.com/myrgic/mod3/issues/new?template=feature.yml) forms.
 
 ## License
 
