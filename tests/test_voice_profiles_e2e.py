@@ -91,15 +91,23 @@ class FakeResult:
 
 
 class FakeModel:
-    """Records kwargs passed to generate() and yields a single fake result."""
+    """Records kwargs passed to generate() and yields a single fake result.
+
+    Also captures the value of self._conds at generate() time, since the
+    chatterbox-turbo dispatch path mutates _conds rather than passing it
+    as a kwarg (the upstream generate() signature ignores `conds=`).
+    """
 
     def __init__(self, name: str) -> None:
         self.name = name
         self.sample_rate = 24000
         self._last_kwargs: dict[str, Any] = {}
+        self._conds = None
+        self._last_conds = None
 
     def generate(self, **kwargs) -> list[FakeResult]:  # type: ignore[override]
         self._last_kwargs = dict(kwargs)
+        self._last_conds = self._conds
         dummy = np.zeros(128, dtype=np.float32)
         return [FakeResult(dummy, self.sample_rate)]
 
@@ -183,7 +191,8 @@ class TestGenerateAudioProfilePath:
         return fake_model, conds
 
     def test_conds_passed_not_ref_audio(self, tmp_path, monkeypatch):
-        """When voice is a registered profile, generate_audio passes conds= not ref_audio."""
+        """When voice is a registered profile, generate_audio routes Conditionals
+        via model._conds (chatterbox-turbo) and never passes ref_audio."""
         from mlx_audio.tts.models.chatterbox.chatterbox import Conditionals
 
         import engine
@@ -193,19 +202,28 @@ class TestGenerateAudioProfilePath:
         list(engine.generate_audio(text="hello", voice="synth_voice"))
 
         kwargs = fake_model._last_kwargs
-        assert "conds" in kwargs, "Expected 'conds' in generate() kwargs"
+        # Turbo's generate() silently ignores `conds=` kwarg and reads from
+        # self._conds, so the dispatch mutates the singleton instead.
         assert "ref_audio" not in kwargs, "Did not expect 'ref_audio' when profile is registered"
-        assert isinstance(kwargs["conds"], Conditionals), "conds must be a Conditionals instance"
+        assert "conds" not in kwargs, "Turbo branch should mutate model._conds, not pass it as a kwarg"
+        actual = fake_model._last_conds
+        assert isinstance(actual, Conditionals), "model._conds must be a Conditionals instance"
+        # Identity is not preserved across registry round-trip (the conds came
+        # from a fresh safetensors load), but the tensors must match.
+        import mlx.core as mx
+
+        assert mx.array_equal(actual.t3.speaker_emb, expected_conds.t3.speaker_emb)
+        assert set(actual.gen.keys()) == set(expected_conds.gen.keys())
 
     def test_conds_has_t3_and_gen(self, tmp_path, monkeypatch):
-        """The Conditionals passed to generate() has .t3 with speaker_emb and .gen dict."""
+        """The Conditionals routed via model._conds has .t3 with speaker_emb and .gen dict."""
         import engine
 
         fake_model, _ = self._setup(tmp_path, monkeypatch)
 
         list(engine.generate_audio(text="hi", voice="synth_voice"))
 
-        conds = fake_model._last_kwargs["conds"]
+        conds = fake_model._last_conds
         assert hasattr(conds, "t3"), "Conditionals must have .t3"
         assert hasattr(conds, "gen"), "Conditionals must have .gen"
         assert hasattr(conds.t3, "speaker_emb"), "T3Cond must have .speaker_emb"

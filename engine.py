@@ -216,7 +216,16 @@ def generate_audio(
             registry = _get_profile_registry()
             profile_conds = registry.get_conditionals(voice) if registry is not None and registry.get(voice) else None
             if profile_conds is not None:
-                gen_kwargs["conds"] = profile_conds
+                if engine == "chatterbox-turbo":
+                    # ChatterboxTurboTTS.generate() accepts only **kwargs for unknown
+                    # arguments and reads conditioning from self._conds, which gets
+                    # overwritten on every prepare_conditionals() call. Mutate the
+                    # singleton model's _conds before generation so the cloned voice
+                    # is actually used. The speech queue serializes calls, so this
+                    # mutation is race-safe in practice.
+                    model._conds = profile_conds
+                else:
+                    gen_kwargs["conds"] = profile_conds
             elif ref_audio:
                 gen_kwargs["ref_audio"] = ref_audio
         elif engine == "spark":
