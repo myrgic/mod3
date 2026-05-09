@@ -1,0 +1,10 @@
+[
+  {
+    "name": "alex_v1",
+    "path": "/abs/path/to/your_reference_clip.wav"
+  },
+  {
+    "name": "narrator_2",
+    "path": "/abs/path/to/another_clip.wav"
+  }
+]

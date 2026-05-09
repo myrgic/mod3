@@ -1,39 +1,49 @@
 #!/usr/bin/env python3
-"""Seed the mod3 voice profile registry from known reference WAV files."""
+"""Seed the mod3 voice profile registry from a local JSON config.
+
+The config is a flat array of {"name": "...", "path": "..."} entries:
+
+    [
+      {"name": "alex_v1", "path": "/abs/path/to/reference.wav"},
+      {"name": "narrator_2", "path": "/abs/path/to/another.wav"}
+    ]
+
+Default location: ~/.mod3/seeds.json (deliberately outside this repo so personal
+voice references stay personal). Override with --seed-list. See
+scripts/seed_voice_profiles.example.json for the canonical format.
+"""
 
 import argparse
-import glob
 import json
 import os
+import pathlib
+import sys
 import urllib.error
 import urllib.request
 
-RESEMBLE_DIR = "/tmp/voice_lab/resemble_demos/24k"
-
-SEEDS = [
-    {"name": "chaz_demo", "path": "/tmp/ref_chaz_demo.wav"},
-    {"name": "sagan", "path": "/tmp/voice_lab/celeb_refs/sagan_commencement.wav"},
-    {"name": "einstein", "path": "/tmp/voice_lab/celeb_refs/einstein_speech.wav"},
-    {"name": "hawking_dectalk", "path": "/tmp/voice_lab/celeb_refs/hawking_dectalk_24k.wav"},
-]
+DEFAULT_SEED_LIST = pathlib.Path.home() / ".mod3" / "seeds.json"
 
 
-def discover_resemble_seeds():
-    pattern = os.path.join(RESEMBLE_DIR, "*_prompt.wav")
-    paths = sorted(glob.glob(pattern))
-    seeds = []
-    for p in paths:
-        basename = os.path.basename(p)  # e.g. jerry_seinfeld_prompt.wav
-        name = basename[: -len("_prompt.wav")]  # strip suffix
-        seeds.append({"name": name, "path": p})
-    return seeds
+def load_seeds(path: pathlib.Path) -> list[dict]:
+    if not path.exists():
+        sys.exit(
+            f"Seed list not found at {path}.\n"
+            f"Create one (see scripts/seed_voice_profiles.example.json) "
+            f"or pass --seed-list <path>."
+        )
+    try:
+        data = json.loads(path.read_text())
+    except json.JSONDecodeError as exc:
+        sys.exit(f"Seed list at {path} is not valid JSON: {exc}")
+    if not isinstance(data, list):
+        sys.exit(f"Seed list at {path} must be a JSON array of {{name,path}} entries.")
+    for entry in data:
+        if not (isinstance(entry, dict) and "name" in entry and "path" in entry):
+            sys.exit(f"Each entry in {path} must be an object with 'name' and 'path' keys.")
+    return data
 
 
-def build_seed_list():
-    return SEEDS + discover_resemble_seeds()
-
-
-def post_profile(base_url, name, path, engine):
+def post_profile(base_url: str, name: str, path: str, engine: str) -> str:
     url = f"{base_url}/v1/voices/profiles"
     payload = json.dumps({"name": name, "ref_audio_path": path, "engine": engine}).encode()
     req = urllib.request.Request(
@@ -61,7 +71,15 @@ def post_profile(base_url, name, path, engine):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Seed mod3 voice profile registry from reference WAV files.")
+    parser = argparse.ArgumentParser(
+        description="Seed the mod3 voice profile registry from a JSON config.",
+    )
+    parser.add_argument(
+        "--seed-list",
+        default=str(DEFAULT_SEED_LIST),
+        metavar="PATH",
+        help=f"JSON file with seed entries (default: {DEFAULT_SEED_LIST}).",
+    )
     parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -80,7 +98,7 @@ def main():
     )
     args = parser.parse_args()
 
-    seeds = build_seed_list()
+    seeds = load_seeds(pathlib.Path(args.seed_list).expanduser())
 
     if args.dry_run:
         print(f"Dry run — would register {len(seeds)} profile(s) against {args.mod3}  [engine: {args.engine}]")
