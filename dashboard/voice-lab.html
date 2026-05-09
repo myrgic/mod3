@@ -184,8 +184,269 @@
 </div>
 
 <script>
-// JS implementations are added in task C3 (later wave).
-// Stubs only here so the page parses cleanly.
+const PROFILES_URL = '/v1/voices/profiles';
+const SYNTH_URL    = '/v1/synthesize';
+
+const els = {
+  refPath:        document.getElementById('lab-ref-path'),
+  profileName:    document.getElementById('lab-profile-name'),
+  engine:         document.getElementById('lab-engine'),
+  exaggeration:   document.getElementById('lab-exaggeration'),
+  refText:        document.getElementById('lab-ref-text'),
+  registerBtn:    document.getElementById('lab-register-btn'),
+  registerStatus: document.getElementById('lab-register-status'),
+  testText:       document.getElementById('lab-test-text'),
+  testVoice:      document.getElementById('lab-test-voice'),
+  testBtn:        document.getElementById('lab-test-btn'),
+  testStatus:     document.getElementById('lab-test-status'),
+  testPlayer:     document.getElementById('lab-test-player'),
+  profileList:    document.getElementById('lab-profile-list'),
+};
+
+// ── helpers ──────────────────────────────────────────────────────────────────
+
+function escapeHtml(text) {
+  const d = document.createElement('div');
+  d.textContent = text == null ? '' : String(text);
+  return d.innerHTML;
+}
+
+function setStatus(el, text, kind) {
+  el.textContent = text;
+  el.className = 'status-line' + (kind ? ' ' + kind : '');
+}
+
+// ── profile list ─────────────────────────────────────────────────────────────
+
+async function loadProfiles() {
+  try {
+    const r = await fetch(PROFILES_URL);
+    if (!r.ok) {
+      els.profileList.innerHTML =
+        '<span style="color:var(--red)">Failed to load profiles (HTTP ' +
+        escapeHtml(String(r.status)) + ')</span>';
+      return;
+    }
+    const data = await r.json();
+    const profiles = data.profiles || [];
+    populateVoiceDropdown(profiles);
+    renderProfileList(profiles);
+  } catch (err) {
+    els.profileList.innerHTML =
+      '<span style="color:var(--red)">Network error: ' + escapeHtml(err.message) + '</span>';
+  }
+}
+
+function renderProfileList(profiles) {
+  if (!profiles.length) {
+    els.profileList.innerHTML = 'No profiles registered yet.';
+    els.profileList.style.fontStyle = 'italic';
+    return;
+  }
+  els.profileList.style.fontStyle = '';
+  els.profileList.innerHTML = profiles.map(p => {
+    const created = p.created_at
+      ? new Date(p.created_at * 1000).toLocaleString()
+      : '—';
+    return (
+      '<div style="display:flex;align-items:baseline;gap:12px;padding:7px 0;' +
+             'border-bottom:1px solid rgba(48,54,61,0.4);">' +
+        '<span style="color:var(--accent);font-weight:600;min-width:120px;' +
+              'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" ' +
+              'title="' + escapeHtml(p.name) + '">' +
+          escapeHtml(p.name) + '</span>' +
+        '<span style="color:var(--muted);font-size:0.8rem;min-width:140px;">' +
+          escapeHtml(p.engine || '—') + '</span>' +
+        '<span style="color:var(--muted);font-size:0.78rem;flex:1;' +
+              'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" ' +
+              'title="' + escapeHtml(p.source_path || '') + '">' +
+          escapeHtml(p.source_path || '—') + '</span>' +
+        '<span style="color:var(--muted);font-size:0.75rem;min-width:140px;' +
+              'font-variant-numeric:tabular-nums;text-align:right;">' +
+          escapeHtml(created) + '</span>' +
+        '<button class="danger" style="padding:3px 10px;font-size:0.75rem;' +
+                'border-radius:4px;flex-shrink:0;" ' +
+                'data-name="' + escapeHtml(p.name) + '">Delete</button>' +
+      '</div>'
+    );
+  }).join('');
+
+  els.profileList.querySelectorAll('button[data-name]').forEach(btn => {
+    btn.addEventListener('click', () => deleteProfile(btn.dataset.name, btn));
+  });
+}
+
+function populateVoiceDropdown(profiles) {
+  const prev = els.testVoice.value;
+  els.testVoice.innerHTML = '';
+  if (!profiles.length) {
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = '— no profiles —';
+    els.testVoice.appendChild(opt);
+    return;
+  }
+  profiles.forEach(p => {
+    const opt = document.createElement('option');
+    opt.value = p.name;
+    opt.textContent = p.name + ' — ' + (p.engine || '?');
+    els.testVoice.appendChild(opt);
+  });
+  // Preserve selection across refreshes when possible
+  if (prev && [...els.testVoice.options].some(o => o.value === prev)) {
+    els.testVoice.value = prev;
+  }
+}
+
+// ── delete profile ────────────────────────────────────────────────────────────
+
+async function deleteProfile(name, btn) {
+  btn.disabled = true;
+  btn.textContent = '...';
+  try {
+    const r = await fetch(PROFILES_URL + '/' + encodeURIComponent(name), {
+      method: 'DELETE',
+    });
+    if (!r.ok) {
+      btn.disabled = false;
+      btn.textContent = 'Delete';
+      // Surface error briefly near the test status (nearest persistent status el)
+      setStatus(els.registerStatus,
+        'Delete failed (' + r.status + ') for "' + name + '"', 'err');
+      return;
+    }
+    await loadProfiles();
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = 'Delete';
+    setStatus(els.registerStatus, 'Delete error: ' + err.message, 'err');
+  }
+}
+
+// ── register profile ──────────────────────────────────────────────────────────
+
+async function registerProfile() {
+  const refPath     = els.refPath.value.trim();
+  const profileName = els.profileName.value.trim();
+  const engine      = els.engine.value;
+  const exaggeration = parseFloat(els.exaggeration.value);
+  const refText     = els.refText.value.trim();
+
+  if (!refPath || !profileName) {
+    setStatus(els.registerStatus,
+      'Reference audio path and profile name are required.', 'err');
+    return;
+  }
+
+  const payload = {
+    name:         profileName,
+    source_path:  refPath,
+    engine:       engine,
+    exaggeration: exaggeration,
+  };
+  if (refText) payload.ref_text = refText;
+
+  els.registerBtn.disabled = true;
+  setStatus(els.registerStatus, 'Registering...', 'warn');
+
+  try {
+    const r = await fetch(PROFILES_URL, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+
+    if (r.ok) {
+      // Clear the form
+      els.refPath.value      = '';
+      els.profileName.value  = '';
+      els.refText.value      = '';
+      setStatus(els.registerStatus, 'Registered “' + profileName + '”', 'ok');
+      await loadProfiles();
+      return;
+    }
+
+    let detail = 'HTTP ' + r.status;
+    try {
+      const body = await r.json();
+      detail = body.error || body.detail || detail;
+    } catch {}
+
+    if (r.status === 409) {
+      setStatus(els.registerStatus, 'Name already exists', 'err');
+    } else if (r.status === 404) {
+      setStatus(els.registerStatus, 'Reference audio not found', 'err');
+    } else {
+      setStatus(els.registerStatus, detail, 'err');
+    }
+  } catch (err) {
+    setStatus(els.registerStatus, 'Network error: ' + err.message, 'err');
+  } finally {
+    els.registerBtn.disabled = false;
+  }
+}
+
+// ── test / speak ──────────────────────────────────────────────────────────────
+
+async function testVoice() {
+  const text  = els.testText.value.trim();
+  const voice = els.testVoice.value;
+
+  if (!text) {
+    setStatus(els.testStatus, 'Enter some text to synthesize.', 'warn');
+    els.testText.focus();
+    return;
+  }
+  if (!voice) {
+    setStatus(els.testStatus, 'No voice profile selected.', 'warn');
+    return;
+  }
+
+  els.testBtn.disabled = true;
+  setStatus(els.testStatus, 'Generating...', 'warn');
+
+  try {
+    const r = await fetch(SYNTH_URL, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({text, voice}),
+    });
+
+    if (!r.ok) {
+      let detail = 'HTTP ' + r.status;
+      try {
+        const body = await r.json();
+        detail = body.error || body.detail || detail;
+      } catch {}
+      setStatus(els.testStatus, 'Error: ' + detail, 'err');
+      return;
+    }
+
+    const blob = await r.blob();
+    // Revoke previous object URL to avoid memory leak
+    if (els.testPlayer.dataset.objUrl) {
+      try { URL.revokeObjectURL(els.testPlayer.dataset.objUrl); } catch {}
+    }
+    const url = URL.createObjectURL(blob);
+    els.testPlayer.dataset.objUrl = url;
+    els.testPlayer.src = url;
+    try { await els.testPlayer.play(); } catch { /* autoplay blocked — user presses play */ }
+    setStatus(els.testStatus, 'Playing “' + voice + '”', 'ok');
+  } catch (err) {
+    setStatus(els.testStatus, 'Network error: ' + err.message, 'err');
+  } finally {
+    els.testBtn.disabled = false;
+  }
+}
+
+// ── wiring ────────────────────────────────────────────────────────────────────
+
+els.registerBtn.addEventListener('click', registerProfile);
+els.testBtn.addEventListener('click', testVoice);
+
+// ── boot ──────────────────────────────────────────────────────────────────────
+
+loadProfiles();
 </script>
 
 </body>
