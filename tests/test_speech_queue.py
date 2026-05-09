@@ -367,14 +367,8 @@ class TestDrainExceptionResilience:
                     break
                 time.sleep(0.05)
 
-            assert seen == ["first", "boom", "third"], (
-                f"drain stopped early: saw {seen}"
-            )
-            assert "third" in completed, (
-                "drain did not run the third job after the second raised"
-            )
-            assert q._draining is False, (
-                "drain thread leaked _draining=True after queue empty"
-            )
+            assert seen == ["first", "boom", "third"], f"drain stopped early: saw {seen}"
+            assert "third" in completed, "drain did not run the third job after the second raised"
+            assert q._draining is False, "drain thread leaked _draining=True after queue empty"
         finally:
             server._run_speech_job = original_runner
