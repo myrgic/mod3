@@ -333,13 +333,44 @@ function populateVoices() {
   const cfg = _engines[engine];
   els.voice.innerHTML = '';
   if (!cfg) return;
-  (cfg.voices || []).forEach(v => {
-    const opt = document.createElement('option');
-    opt.value = v;
-    opt.textContent = v;
-    els.voice.appendChild(opt);
-  });
-  els.voice.value = cfg.default_voice || (cfg.voices && cfg.voices[0]) || '';
+  const voices = cfg.voices || [];
+  const customSet = new Set(cfg.custom_voices || []);
+  if (customSet.size === 0) {
+    // No custom voices — flat list, unchanged behavior
+    voices.forEach(v => {
+      const opt = document.createElement('option');
+      opt.value = v;
+      opt.textContent = v;
+      els.voice.appendChild(opt);
+    });
+  } else {
+    // Split into built-in vs custom, render with optgroups
+    const builtins = voices.filter(v => !customSet.has(v));
+    const customs  = voices.filter(v => customSet.has(v));
+    if (builtins.length > 0) {
+      const grp = document.createElement('optgroup');
+      grp.label = 'Built-in voices';
+      builtins.forEach(v => {
+        const opt = document.createElement('option');
+        opt.value = v;
+        opt.textContent = v;
+        grp.appendChild(opt);
+      });
+      els.voice.appendChild(grp);
+    }
+    if (customs.length > 0) {
+      const grp = document.createElement('optgroup');
+      grp.label = 'Custom (cloned) voices';
+      customs.forEach(v => {
+        const opt = document.createElement('option');
+        opt.value = v;
+        opt.textContent = v;
+        grp.appendChild(opt);
+      });
+      els.voice.appendChild(grp);
+    }
+  }
+  els.voice.value = cfg.default_voice || voices[0] || '';
   // Show emotion control only when engine declares support
   const supports = cfg.supports || [];
   els.emotionGroup.style.display = supports.includes('emotion') ? '' : 'none';
