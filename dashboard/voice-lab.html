@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mod&#179; Voice Lab</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff;
+    --green: #3fb950; --orange: #d29922; --red: #f85149;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, system-ui, sans-serif; background: var(--bg); color: var(--text); line-height: 1.5; min-height: 100vh; }
+
+  .header {
+    display: flex; align-items: center; gap: 16px;
+    padding: 12px 24px; border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .header h1 { font-size: 1.2rem; margin-right: auto; }
+  .header h1 .sub { color: var(--muted); font-weight: 400; font-size: 0.95rem; margin-left: 8px; }
+  .nav-link {
+    color: var(--muted); text-decoration: none; font-size: 0.85rem;
+    padding: 4px 10px; border: 1px solid var(--border); border-radius: 4px;
+  }
+  .nav-link:hover { color: var(--accent); border-color: var(--accent); }
+
+  .main { max-width: 920px; margin: 0 auto; padding: 20px 24px 48px; }
+
+  .panel {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 16px; margin-bottom: 16px;
+  }
+  .panel h2 {
+    font-size: 0.75rem; color: var(--muted); text-transform: uppercase;
+    letter-spacing: 0.5px; margin-bottom: 10px; font-weight: 600;
+  }
+
+  .controls-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 10px;
+  }
+  .form-group { display: flex; flex-direction: column; gap: 3px; }
+  .form-group label {
+    font-size: 0.7rem; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  select, input[type="text"] {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+    padding: 7px 8px; color: var(--text); font-size: 0.85rem; font-family: inherit;
+    width: 100%;
+  }
+  select:focus, input:focus { outline: none; border-color: var(--accent); }
+
+  textarea {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+    padding: 7px 8px; color: var(--text); font-size: 0.85rem; font-family: inherit;
+    width: 100%; resize: vertical;
+  }
+  textarea:focus { outline: none; border-color: var(--accent); }
+
+  textarea.utterance {
+    min-height: 140px; border-radius: 6px;
+    padding: 12px 14px; font-size: 0.95rem; line-height: 1.5;
+  }
+
+  .helper-text {
+    font-size: 0.7rem; color: var(--muted); margin-top: 4px;
+  }
+
+  .button-row { display: flex; gap: 10px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
+  button.primary {
+    background: var(--accent); color: #000; border: none; border-radius: 6px;
+    padding: 9px 22px; font-weight: 600; cursor: pointer; font-size: 0.9rem;
+  }
+  button.primary:hover { opacity: 0.9; }
+  button.primary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .status-line {
+    margin-left: auto; font-size: 0.8rem; color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .status-line.ok { color: var(--green); }
+  .status-line.err { color: var(--red); }
+  .status-line.warn { color: var(--orange); }
+
+  audio { width: 100%; margin-top: 10px; }
+  audio:focus { outline: none; }
+
+  #lab-profile-list {
+    font-size: 0.85rem; color: var(--muted); font-style: italic; padding: 4px 0;
+  }
+
+  @media (max-width: 600px) {
+    .main { padding: 12px 16px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Mod&#179; <span class="sub">Voice Lab</span></h1>
+  <a class="nav-link" href="/dashboard/console.html">&larr; Console</a>
+</div>
+
+<div class="main">
+
+  <div class="panel">
+    <h2>Reference clip</h2>
+    <div class="form-group">
+      <label>Reference audio path</label>
+      <input type="text" id="lab-ref-path" placeholder="/path/to/reference.wav">
+    </div>
+    <p class="helper-text">24kHz mono WAV recommended; 5-30 seconds is the cloning sweet spot.</p>
+  </div>
+
+  <div class="panel">
+    <h2>Voice configuration</h2>
+    <div class="controls-grid">
+      <div class="form-group">
+        <label>Profile name</label>
+        <input type="text" id="lab-profile-name" placeholder="e.g. chaz_v1">
+      </div>
+      <div class="form-group">
+        <label>Engine</label>
+        <select id="lab-engine">
+          <option value="chatterbox-turbo" selected>chatterbox-turbo</option>
+          <option value="chatterbox">chatterbox</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Exaggeration</label>
+        <select id="lab-exaggeration">
+          <option value="0.25">0.25 — Subdued</option>
+          <option value="0.5" selected>0.5 — Normal</option>
+          <option value="0.75">0.75 — Animated</option>
+          <option value="1.0">1.0 — Intense</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-group" style="margin-top: 10px;">
+      <label>Reference transcript (optional)</label>
+      <textarea id="lab-ref-text" rows="3" placeholder="Optional. Helps some engines lock onto the speaker."></textarea>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Register profile</h2>
+    <div class="button-row">
+      <button class="primary" id="lab-register-btn">Register</button>
+      <span class="status-line" id="lab-register-status">Ready</span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Test the registered voice</h2>
+    <textarea class="utterance" id="lab-test-text" placeholder="Type text to synthesize with the registered voice."></textarea>
+    <div class="controls-grid" style="margin-top: 10px;">
+      <div class="form-group">
+        <label>Voice profile</label>
+        <select id="lab-test-voice"></select>
+      </div>
+      <div class="form-group">
+        <label>Format</label>
+        <select id="lab-test-format">
+          <option value="wav" selected>WAV</option>
+          <option value="pcm">PCM</option>
+        </select>
+      </div>
+    </div>
+    <div class="button-row">
+      <button class="primary" id="lab-test-btn">Speak</button>
+      <span class="status-line" id="lab-test-status">Ready</span>
+    </div>
+    <audio id="lab-test-player" controls preload="none"></audio>
+  </div>
+
+  <div class="panel">
+    <h2>Profile library</h2>
+    <div id="lab-profile-list">No profiles registered yet.</div>
+  </div>
+
+</div>
+
+<script>
+// JS implementations are added in task C3 (later wave).
+// Stubs only here so the page parses cleanly.
+</script>
+
+</body>
+</html>
