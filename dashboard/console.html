@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mod&#179; Console</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff;
+    --green: #3fb950; --orange: #d29922; --red: #f85149;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, system-ui, sans-serif; background: var(--bg); color: var(--text); line-height: 1.5; min-height: 100vh; }
+
+  .header {
+    display: flex; align-items: center; gap: 16px;
+    padding: 12px 24px; border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .header h1 { font-size: 1.2rem; margin-right: auto; }
+  .header h1 .sub { color: var(--muted); font-weight: 400; font-size: 0.95rem; margin-left: 8px; }
+  .nav-link {
+    color: var(--muted); text-decoration: none; font-size: 0.85rem;
+    padding: 4px 10px; border: 1px solid var(--border); border-radius: 4px;
+  }
+  .nav-link:hover { color: var(--accent); border-color: var(--accent); }
+
+  .main { max-width: 920px; margin: 0 auto; padding: 20px 24px 48px; }
+
+  .panel {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 16px; margin-bottom: 16px;
+  }
+  .panel h2 {
+    font-size: 0.75rem; color: var(--muted); text-transform: uppercase;
+    letter-spacing: 0.5px; margin-bottom: 10px; font-weight: 600;
+  }
+
+  .controls-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 10px;
+  }
+  .form-group { display: flex; flex-direction: column; gap: 3px; }
+  .form-group label {
+    font-size: 0.7rem; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  select, input[type="text"], input[type="number"] {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+    padding: 7px 8px; color: var(--text); font-size: 0.85rem; font-family: inherit;
+    width: 100%;
+  }
+  select:focus, input:focus { outline: none; border-color: var(--accent); }
+
+  textarea.utterance {
+    width: 100%; min-height: 140px; resize: vertical;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    padding: 12px 14px; color: var(--text); font-size: 0.95rem;
+    font-family: inherit; line-height: 1.5;
+  }
+  textarea.utterance:focus { outline: none; border-color: var(--accent); }
+
+  .button-row { display: flex; gap: 10px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
+  button.primary {
+    background: var(--accent); color: #000; border: none; border-radius: 6px;
+    padding: 9px 22px; font-weight: 600; cursor: pointer; font-size: 0.9rem;
+  }
+  button.primary:hover { opacity: 0.9; }
+  button.primary:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.secondary {
+    background: none; border: 1px solid var(--border); border-radius: 6px;
+    padding: 8px 16px; color: var(--text); cursor: pointer; font-size: 0.85rem;
+  }
+  button.secondary:hover { border-color: var(--accent); color: var(--accent); }
+  button.danger {
+    background: none; border: 1px solid var(--red); border-radius: 6px;
+    padding: 8px 16px; color: var(--red); cursor: pointer; font-size: 0.85rem;
+  }
+  button.danger:hover { background: var(--red); color: #000; }
+
+  .status-line {
+    margin-left: auto; font-size: 0.8rem; color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .status-line.ok { color: var(--green); }
+  .status-line.err { color: var(--red); }
+  .status-line.warn { color: var(--orange); }
+
+  audio { width: 100%; margin-top: 10px; }
+  audio:focus { outline: none; }
+
+  .metrics {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 8px; margin-top: 8px;
+  }
+  .metric {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+    padding: 6px 10px;
+  }
+  .metric .lbl {
+    font-size: 0.65rem; color: var(--muted); text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .metric .val {
+    font-size: 0.9rem; color: var(--text); font-variant-numeric: tabular-nums;
+    margin-top: 2px;
+  }
+
+  .preset-row { display: flex; gap: 6px; flex-wrap: wrap; }
+  .preset-btn {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 12px;
+    padding: 4px 10px; color: var(--muted); cursor: pointer;
+    font-size: 0.75rem; font-family: inherit;
+  }
+  .preset-btn:hover { color: var(--accent); border-color: var(--accent); }
+
+  .history { font-size: 0.85rem; }
+  .history-row {
+    display: flex; gap: 10px; padding: 6px 0;
+    border-bottom: 1px solid rgba(48,54,61,0.4);
+    align-items: baseline;
+  }
+  .history-row:last-child { border-bottom: none; }
+  .history-row .h-time {
+    color: var(--muted); font-size: 0.7rem; flex-shrink: 0;
+    font-variant-numeric: tabular-nums; width: 60px;
+  }
+  .history-row .h-voice {
+    color: var(--accent); font-size: 0.7rem; flex-shrink: 0; width: 110px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .history-row .h-text {
+    flex: 1; color: var(--text); overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap;
+    cursor: pointer;
+  }
+  .history-row .h-text:hover { color: var(--accent); }
+  .history-row .h-meta {
+    color: var(--muted); font-size: 0.7rem; flex-shrink: 0;
+    font-variant-numeric: tabular-nums;
+  }
+  .history-empty { color: var(--muted); font-style: italic; padding: 8px 0; }
+
+  .session-hint {
+    font-size: 0.7rem; color: var(--muted); margin-top: 4px;
+  }
+
+  @media (max-width: 600px) {
+    .main { padding: 12px 16px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Mod&#179; <span class="sub">Console</span></h1>
+  <a class="nav-link" href="/dashboard">&larr; Dashboard</a>
+</div>
+
+<div class="main">
+
+  <div class="panel">
+    <h2>Utterance</h2>
+    <textarea class="utterance" id="utterance" placeholder="Type or paste any text. Cmd/Ctrl+Enter to speak."></textarea>
+    <div class="preset-row" style="margin-top:8px;">
+      <button class="preset-btn" data-preset="The quick brown fox jumps over the lazy dog.">fox</button>
+      <button class="preset-btn" data-preset="Testing one, two, three. This is a microphone check.">mic check</button>
+      <button class="preset-btn" data-preset="Hello there. I'm Mod three, the voice channel for Cog OS.">intro</button>
+      <button class="preset-btn" data-preset="In the beginning was the Word, and the Word was with God, and the Word was God. Through him all things were made.">long</button>
+      <button class="preset-btn" data-preset="">clear</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Voice configuration</h2>
+    <div class="controls-grid">
+      <div class="form-group">
+        <label>Engine</label>
+        <select id="engine"></select>
+      </div>
+      <div class="form-group">
+        <label>Voice</label>
+        <select id="voice"></select>
+      </div>
+      <div class="form-group">
+        <label>Speed</label>
+        <select id="speed">
+          <option value="0.75">0.75x</option>
+          <option value="1.0">1.0x</option>
+          <option value="1.25" selected>1.25x</option>
+          <option value="1.5">1.5x</option>
+          <option value="1.75">1.75x</option>
+          <option value="2.0">2.0x</option>
+        </select>
+      </div>
+      <div class="form-group" id="emotion-group" style="display:none;">
+        <label>Emotion</label>
+        <select id="emotion">
+          <option value="0.25">Subdued</option>
+          <option value="0.5" selected>Normal</option>
+          <option value="0.75">Animated</option>
+          <option value="1.0">Intense</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Format</label>
+        <select id="format">
+          <option value="wav" selected>WAV</option>
+          <option value="pcm">PCM</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label title="Optional. If set, audio routes via /ws/audio/{session_id} to existing subscribers (e.g. the main dashboard tab). Leave empty to play inline here.">Session ID <span style="color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0;">(optional)</span></label>
+        <input type="text" id="session-id" placeholder="(inline playback)">
+      </div>
+      <div class="form-group" style="grid-column: 1 / -1;">
+        <label title="Path to a 24kHz mono WAV for zero-shot voice cloning. Honored by the chatterbox engine; other engines ignore it. Use shorter clips (5-10s) for cleaner cloning.">Reference audio <span style="color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0;">(chatterbox cloning, optional)</span></label>
+        <input type="text" id="ref-audio" placeholder="/path/to/reference.wav">
+      </div>
+    </div>
+    <div class="session-hint" id="active-sessions"></div>
+  </div>
+
+  <div class="panel">
+    <div class="button-row">
+      <button class="primary" id="speak-btn">&#9654; Speak</button>
+      <button class="danger" id="stop-btn" title="POST /v1/stop — interrupts current playback and clears the queue">&#9632; Stop</button>
+      <button class="secondary" id="copy-curl-btn" title="Copy the equivalent curl command">Copy curl</button>
+      <span class="status-line" id="status">Ready</span>
+    </div>
+    <audio id="player" controls preload="none"></audio>
+    <div class="metrics" id="metrics" style="display:none;"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Recent jobs</h2>
+    <div class="history" id="history"></div>
+  </div>
+
+</div>
+
+<script>
+const VOICES_URL = '/v1/voices';
+const SYNTH_URL = '/v1/synthesize';
+const STOP_URL = '/v1/stop';
+const JOBS_URL = '/v1/jobs';
+const SESSIONS_URL = '/v1/sessions';
+
+const STORAGE_KEY = 'mod3-console-prefs';
+
+const els = {
+  utterance: document.getElementById('utterance'),
+  engine: document.getElementById('engine'),
+  voice: document.getElementById('voice'),
+  speed: document.getElementById('speed'),
+  emotion: document.getElementById('emotion'),
+  emotionGroup: document.getElementById('emotion-group'),
+  format: document.getElementById('format'),
+  sessionId: document.getElementById('session-id'),
+  refAudio: document.getElementById('ref-audio'),
+  speakBtn: document.getElementById('speak-btn'),
+  stopBtn: document.getElementById('stop-btn'),
+  copyCurlBtn: document.getElementById('copy-curl-btn'),
+  status: document.getElementById('status'),
+  player: document.getElementById('player'),
+  metrics: document.getElementById('metrics'),
+  history: document.getElementById('history'),
+  activeSessions: document.getElementById('active-sessions'),
+};
+
+let _engines = {};
+
+function setStatus(text, kind) {
+  els.status.textContent = text;
+  els.status.className = 'status-line' + (kind ? ' ' + kind : '');
+}
+
+function loadPrefs() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch { return {}; }
+}
+
+function savePrefs() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      engine: els.engine.value,
+      voice: els.voice.value,
+      speed: els.speed.value,
+      format: els.format.value,
+      sessionId: els.sessionId.value,
+      refAudio: els.refAudio.value,
+    }));
+  } catch { /* private mode */ }
+}
+
+async function loadVoices() {
+  setStatus('Loading voices...');
+  try {
+    const r = await fetch(VOICES_URL);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const data = await r.json();
+    _engines = data.engines || {};
+
+    const prefs = loadPrefs();
+    els.engine.innerHTML = '';
+    Object.keys(_engines).forEach(name => {
+      const opt = document.createElement('option');
+      opt.value = name;
+      opt.textContent = name;
+      els.engine.appendChild(opt);
+    });
+    els.engine.value = prefs.engine && _engines[prefs.engine] ? prefs.engine : 'kokoro';
+    populateVoices();
+    if (prefs.voice) {
+      const opt = [...els.voice.options].find(o => o.value === prefs.voice);
+      if (opt) els.voice.value = prefs.voice;
+    }
+    if (prefs.speed) els.speed.value = prefs.speed;
+    if (prefs.format) els.format.value = prefs.format;
+    if (prefs.sessionId) els.sessionId.value = prefs.sessionId;
+    if (prefs.refAudio) els.refAudio.value = prefs.refAudio;
+    setStatus('Ready', 'ok');
+  } catch (err) {
+    setStatus('Failed to load voices: ' + err.message, 'err');
+  }
+}
+
+function populateVoices() {
+  const engine = els.engine.value;
+  const cfg = _engines[engine];
+  els.voice.innerHTML = '';
+  if (!cfg) return;
+  const voices = cfg.voices || [];
+  const customSet = new Set(cfg.custom_voices || []);
+  if (customSet.size === 0) {
+    // No custom voices — flat list, unchanged behavior
+    voices.forEach(v => {
+      const opt = document.createElement('option');
+      opt.value = v;
+      opt.textContent = v;
+      els.voice.appendChild(opt);
+    });
+  } else {
+    // Split into built-in vs custom, render with optgroups
+    const builtins = voices.filter(v => !customSet.has(v));
+    const customs  = voices.filter(v => customSet.has(v));
+    if (builtins.length > 0) {
+      const grp = document.createElement('optgroup');
+      grp.label = 'Built-in voices';
+      builtins.forEach(v => {
+        const opt = document.createElement('option');
+        opt.value = v;
+        opt.textContent = v;
+        grp.appendChild(opt);
+      });
+      els.voice.appendChild(grp);
+    }
+    if (customs.length > 0) {
+      const grp = document.createElement('optgroup');
+      grp.label = 'Custom (cloned) voices';
+      customs.forEach(v => {
+        const opt = document.createElement('option');
+        opt.value = v;
+        opt.textContent = v;
+        grp.appendChild(opt);
+      });
+      els.voice.appendChild(grp);
+    }
+  }
+  els.voice.value = cfg.default_voice || voices[0] || '';
+  // Show emotion control only when engine declares support
+  const supports = cfg.supports || [];
+  els.emotionGroup.style.display = supports.includes('emotion') ? '' : 'none';
+}
+
+async function loadActiveSessions() {
+  try {
+    const r = await fetch(SESSIONS_URL);
+    if (!r.ok) return;
+    const body = await r.json();
+    const sessions = body.sessions || [];
+    if (sessions.length === 0) {
+      els.activeSessions.textContent = '';
+      return;
+    }
+    const lines = sessions.slice(0, 5).map(s => {
+      const sid = s.session_id || '';
+      const pid = s.participant_id || '';
+      const voice = s.assigned_voice || '—';
+      return `${pid} · ${voice} · ${sid}`;
+    });
+    els.activeSessions.innerHTML =
+      '<strong style="color:var(--muted);">Active sessions:</strong> ' +
+      sessions.map(s =>
+        `<a href="#" data-sid="${escapeAttr(s.session_id)}" class="sid-link" style="color:var(--accent); text-decoration:none; margin-right:8px;">${escapeHtml((s.participant_id || '?') + ' (' + (s.session_id || '').slice(0,12) + ')')}</a>`
+      ).join('');
+    [...els.activeSessions.querySelectorAll('.sid-link')].forEach(a => {
+      a.addEventListener('click', (e) => {
+        e.preventDefault();
+        els.sessionId.value = a.dataset.sid;
+        savePrefs();
+      });
+    });
+  } catch { /* ignore */ }
+}
+
+function escapeHtml(text) {
+  const d = document.createElement('div');
+  d.textContent = text == null ? '' : String(text);
+  return d.innerHTML;
+}
+function escapeAttr(text) {
+  return escapeHtml(text).replace(/"/g, '&quot;');
+}
+
+function fmtMs(sec) {
+  if (sec == null) return '—';
+  if (sec < 1) return Math.round(sec * 1000) + ' ms';
+  return sec.toFixed(2) + ' s';
+}
+
+function renderMetrics(headers) {
+  const get = (k) => headers.get(k);
+  const parts = [
+    ['Engine', get('X-Mod3-Engine') || '—'],
+    ['Voice', get('X-Mod3-Voice') || '—'],
+    ['Audio dur', fmtMs(parseFloat(get('X-Mod3-Duration-Sec') || '0'))],
+    ['Gen time', fmtMs(parseFloat(get('X-Mod3-Gen-Time-Sec') || '0'))],
+    ['Total', fmtMs(parseFloat(get('X-Mod3-Total-Time-Sec') || '0'))],
+    ['RTF', get('X-Mod3-RTF') || '—'],
+    ['Job', (get('X-Mod3-Job-Id') || '—').slice(0, 8)],
+    ['WS subs', get('X-Mod3-WS-Subscribers') || '0'],
+  ];
+  els.metrics.innerHTML = parts.map(([k, v]) =>
+    `<div class="metric"><div class="lbl">${escapeHtml(k)}</div><div class="val">${escapeHtml(v)}</div></div>`
+  ).join('');
+  els.metrics.style.display = '';
+}
+
+async function speak() {
+  const text = els.utterance.value.trim();
+  if (!text) {
+    setStatus('Empty utterance', 'warn');
+    els.utterance.focus();
+    return;
+  }
+  const sessionId = els.sessionId.value.trim();
+  const refAudio = els.refAudio.value.trim();
+  const payload = {
+    text,
+    voice: els.voice.value,
+    speed: parseFloat(els.speed.value),
+    emotion: parseFloat(els.emotion.value),
+    format: els.format.value,
+  };
+  if (sessionId) payload.session_id = sessionId;
+  if (refAudio) payload.ref_audio = refAudio;
+
+  els.speakBtn.disabled = true;
+  setStatus('Generating...', 'warn');
+  const t0 = performance.now();
+
+  try {
+    const r = await fetch(SYNTH_URL, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+    if (!r.ok) {
+      const txt = await r.text();
+      let msg = txt;
+      try { msg = JSON.parse(txt).error || txt; } catch {}
+      setStatus('Error ' + r.status + ': ' + msg, 'err');
+      return;
+    }
+    const blob = await r.blob();
+    renderMetrics(r.headers);
+    const elapsed = ((performance.now() - t0) / 1000).toFixed(2);
+
+    if (sessionId) {
+      // Audio was routed over the session's /ws/audio channel — don't play here.
+      const subs = r.headers.get('X-Mod3-WS-Subscribers') || '0';
+      setStatus(`Routed to session (${subs} subscriber${subs === '1' ? '' : 's'}) in ${elapsed}s`, 'ok');
+    } else {
+      // Play inline
+      const url = URL.createObjectURL(blob);
+      // Revoke previous URL if any
+      if (els.player.dataset.objUrl) {
+        try { URL.revokeObjectURL(els.player.dataset.objUrl); } catch {}
+      }
+      els.player.dataset.objUrl = url;
+      // PCM has no container — point a download link at it instead, browser cannot play raw PCM
+      if (payload.format === 'pcm') {
+        setStatus(`Generated PCM (${blob.size} bytes) in ${elapsed}s — browser cannot play raw PCM, use WAV for inline preview`, 'warn');
+        els.player.removeAttribute('src');
+      } else {
+        els.player.src = url;
+        try { await els.player.play(); } catch { /* autoplay blocked, user can press play */ }
+        setStatus(`Played in ${elapsed}s`, 'ok');
+      }
+    }
+    loadHistory();
+  } catch (err) {
+    setStatus('Network error: ' + err.message, 'err');
+  } finally {
+    els.speakBtn.disabled = false;
+  }
+}
+
+async function stopSpeech() {
+  setStatus('Stopping...', 'warn');
+  try {
+    const r = await fetch(STOP_URL, {method: 'POST'});
+    if (!r.ok) {
+      setStatus('Stop failed: ' + r.status, 'err');
+      return;
+    }
+    try { els.player.pause(); els.player.currentTime = 0; } catch {}
+    setStatus('Stopped', 'ok');
+  } catch (err) {
+    setStatus('Stop network error: ' + err.message, 'err');
+  }
+}
+
+async function loadHistory() {
+  try {
+    const r = await fetch(JOBS_URL + '?limit=15');
+    if (!r.ok) return;
+    const body = await r.json();
+    const jobs = body.jobs || body || [];
+    if (!Array.isArray(jobs) || jobs.length === 0) {
+      els.history.innerHTML = '<div class="history-empty">No jobs yet.</div>';
+      return;
+    }
+    els.history.innerHTML = jobs.slice(0, 15).map(j => {
+      const ts = j.requested_at ? new Date(j.requested_at * 1000) : null;
+      const tstr = ts ? ts.toTimeString().slice(0, 8) : '';
+      const text = j.text || '';
+      const voice = j.voice || j.engine || '';
+      const dur = j.metrics && j.metrics.audio_duration_sec;
+      const rtf = j.metrics && j.metrics.rtf;
+      const meta = (dur != null ? dur.toFixed(2) + 's' : '') +
+                   (rtf != null ? '  ' + rtf + 'x' : '');
+      return (
+        '<div class="history-row">' +
+          '<span class="h-time">' + escapeHtml(tstr) + '</span>' +
+          '<span class="h-voice">' + escapeHtml(voice) + '</span>' +
+          '<span class="h-text" data-text="' + escapeAttr(text) + '" title="Click to load">' +
+            escapeHtml(text) + '</span>' +
+          '<span class="h-meta">' + escapeHtml(meta) + '</span>' +
+        '</div>'
+      );
+    }).join('');
+    [...els.history.querySelectorAll('.h-text')].forEach(el => {
+      el.addEventListener('click', () => {
+        els.utterance.value = el.dataset.text;
+        els.utterance.focus();
+      });
+    });
+  } catch { /* ignore */ }
+}
+
+function copyCurl() {
+  const text = els.utterance.value.trim() || '...';
+  const sessionId = els.sessionId.value.trim();
+  const refAudio = els.refAudio.value.trim();
+  const payload = {
+    text,
+    voice: els.voice.value,
+    speed: parseFloat(els.speed.value),
+    emotion: parseFloat(els.emotion.value),
+    format: els.format.value,
+  };
+  if (sessionId) payload.session_id = sessionId;
+  if (refAudio) payload.ref_audio = refAudio;
+  const cmd = `curl -sS -X POST ${window.location.origin}${SYNTH_URL} \\\n` +
+              `  -H 'Content-Type: application/json' \\\n` +
+              `  -d '${JSON.stringify(payload).replace(/'/g, "'\\''")}' \\\n` +
+              `  --output utterance.${payload.format}`;
+  navigator.clipboard.writeText(cmd).then(() => {
+    setStatus('curl copied to clipboard', 'ok');
+  }, () => {
+    setStatus('Clipboard write failed', 'err');
+  });
+}
+
+// --- Wiring ---
+els.engine.addEventListener('change', () => { populateVoices(); savePrefs(); });
+els.voice.addEventListener('change', savePrefs);
+els.speed.addEventListener('change', savePrefs);
+els.format.addEventListener('change', savePrefs);
+els.sessionId.addEventListener('change', savePrefs);
+els.refAudio.addEventListener('change', savePrefs);
+
+els.speakBtn.addEventListener('click', speak);
+els.stopBtn.addEventListener('click', stopSpeech);
+els.copyCurlBtn.addEventListener('click', copyCurl);
+
+els.utterance.addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+    e.preventDefault();
+    speak();
+  }
+});
+
+[...document.querySelectorAll('.preset-btn')].forEach(b => {
+  b.addEventListener('click', () => {
+    els.utterance.value = b.dataset.preset;
+    els.utterance.focus();
+  });
+});
+
+// --- Boot ---
+loadVoices().then(() => {
+  loadActiveSessions();
+  loadHistory();
+});
+setInterval(loadActiveSessions, 5000);
+setInterval(loadHistory, 8000);
+</script>
+
+</body>
+</html>

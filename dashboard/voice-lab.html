@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mod&#179; Voice Lab</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff;
+    --green: #3fb950; --orange: #d29922; --red: #f85149;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, system-ui, sans-serif; background: var(--bg); color: var(--text); line-height: 1.5; min-height: 100vh; }
+
+  .header {
+    display: flex; align-items: center; gap: 16px;
+    padding: 12px 24px; border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .header h1 { font-size: 1.2rem; margin-right: auto; }
+  .header h1 .sub { color: var(--muted); font-weight: 400; font-size: 0.95rem; margin-left: 8px; }
+  .nav-link {
+    color: var(--muted); text-decoration: none; font-size: 0.85rem;
+    padding: 4px 10px; border: 1px solid var(--border); border-radius: 4px;
+  }
+  .nav-link:hover { color: var(--accent); border-color: var(--accent); }
+
+  .main { max-width: 920px; margin: 0 auto; padding: 20px 24px 48px; }
+
+  .panel {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 16px; margin-bottom: 16px;
+  }
+  .panel h2 {
+    font-size: 0.75rem; color: var(--muted); text-transform: uppercase;
+    letter-spacing: 0.5px; margin-bottom: 10px; font-weight: 600;
+  }
+
+  .controls-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 10px;
+  }
+  .form-group { display: flex; flex-direction: column; gap: 3px; }
+  .form-group label {
+    font-size: 0.7rem; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  select, input[type="text"] {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+    padding: 7px 8px; color: var(--text); font-size: 0.85rem; font-family: inherit;
+    width: 100%;
+  }
+  select:focus, input:focus { outline: none; border-color: var(--accent); }
+
+  textarea {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+    padding: 7px 8px; color: var(--text); font-size: 0.85rem; font-family: inherit;
+    width: 100%; resize: vertical;
+  }
+  textarea:focus { outline: none; border-color: var(--accent); }
+
+  textarea.utterance {
+    min-height: 140px; border-radius: 6px;
+    padding: 12px 14px; font-size: 0.95rem; line-height: 1.5;
+  }
+
+  .helper-text {
+    font-size: 0.7rem; color: var(--muted); margin-top: 4px;
+  }
+
+  .button-row { display: flex; gap: 10px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
+  button.primary {
+    background: var(--accent); color: #000; border: none; border-radius: 6px;
+    padding: 9px 22px; font-weight: 600; cursor: pointer; font-size: 0.9rem;
+  }
+  button.primary:hover { opacity: 0.9; }
+  button.primary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .status-line {
+    margin-left: auto; font-size: 0.8rem; color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .status-line.ok { color: var(--green); }
+  .status-line.err { color: var(--red); }
+  .status-line.warn { color: var(--orange); }
+
+  audio { width: 100%; margin-top: 10px; }
+  audio:focus { outline: none; }
+
+  #lab-profile-list {
+    font-size: 0.85rem; color: var(--muted); font-style: italic; padding: 4px 0;
+  }
+
+  @media (max-width: 600px) {
+    .main { padding: 12px 16px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Mod&#179; <span class="sub">Voice Lab</span></h1>
+  <a class="nav-link" href="/dashboard/console.html">&larr; Console</a>
+</div>
+
+<div class="main">
+
+  <div class="panel">
+    <h2>Reference clip</h2>
+    <div class="form-group">
+      <label>Reference audio path</label>
+      <input type="text" id="lab-ref-path" placeholder="/path/to/reference.wav">
+    </div>
+    <p class="helper-text">24kHz mono WAV recommended; 5-30 seconds is the cloning sweet spot.</p>
+  </div>
+
+  <div class="panel">
+    <h2>Voice configuration</h2>
+    <div class="controls-grid">
+      <div class="form-group">
+        <label>Profile name</label>
+        <input type="text" id="lab-profile-name" placeholder="e.g. chaz_v1">
+      </div>
+      <div class="form-group">
+        <label>Engine</label>
+        <select id="lab-engine">
+          <option value="chatterbox-turbo" selected>chatterbox-turbo</option>
+          <option value="chatterbox">chatterbox</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Exaggeration</label>
+        <select id="lab-exaggeration">
+          <option value="0.25">0.25 — Subdued</option>
+          <option value="0.5" selected>0.5 — Normal</option>
+          <option value="0.75">0.75 — Animated</option>
+          <option value="1.0">1.0 — Intense</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-group" style="margin-top: 10px;">
+      <label>Reference transcript (optional)</label>
+      <textarea id="lab-ref-text" rows="3" placeholder="Optional. Helps some engines lock onto the speaker."></textarea>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Register profile</h2>
+    <div class="button-row">
+      <button class="primary" id="lab-register-btn">Register</button>
+      <span class="status-line" id="lab-register-status">Ready</span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Test the registered voice</h2>
+    <textarea class="utterance" id="lab-test-text" placeholder="Type text to synthesize with the registered voice."></textarea>
+    <div class="controls-grid" style="margin-top: 10px;">
+      <div class="form-group">
+        <label>Voice profile</label>
+        <select id="lab-test-voice"></select>
+      </div>
+      <div class="form-group">
+        <label>Format</label>
+        <select id="lab-test-format">
+          <option value="wav" selected>WAV</option>
+          <option value="pcm">PCM</option>
+        </select>
+      </div>
+    </div>
+    <div class="button-row">
+      <button class="primary" id="lab-test-btn">Speak</button>
+      <span class="status-line" id="lab-test-status">Ready</span>
+    </div>
+    <audio id="lab-test-player" controls preload="none"></audio>
+  </div>
+
+  <div class="panel">
+    <h2>Profile library</h2>
+    <div id="lab-profile-list">No profiles registered yet.</div>
+  </div>
+
+</div>
+
+<script>
+const PROFILES_URL = '/v1/voices/profiles';
+const SYNTH_URL    = '/v1/synthesize';
+
+const els = {
+  refPath:        document.getElementById('lab-ref-path'),
+  profileName:    document.getElementById('lab-profile-name'),
+  engine:         document.getElementById('lab-engine'),
+  exaggeration:   document.getElementById('lab-exaggeration'),
+  refText:        document.getElementById('lab-ref-text'),
+  registerBtn:    document.getElementById('lab-register-btn'),
+  registerStatus: document.getElementById('lab-register-status'),
+  testText:       document.getElementById('lab-test-text'),
+  testVoice:      document.getElementById('lab-test-voice'),
+  testBtn:        document.getElementById('lab-test-btn'),
+  testStatus:     document.getElementById('lab-test-status'),
+  testPlayer:     document.getElementById('lab-test-player'),
+  profileList:    document.getElementById('lab-profile-list'),
+};
+
+// ── helpers ──────────────────────────────────────────────────────────────────
+
+function escapeHtml(text) {
+  const d = document.createElement('div');
+  d.textContent = text == null ? '' : String(text);
+  return d.innerHTML;
+}
+
+function setStatus(el, text, kind) {
+  el.textContent = text;
+  el.className = 'status-line' + (kind ? ' ' + kind : '');
+}
+
+// ── profile list ─────────────────────────────────────────────────────────────
+
+async function loadProfiles() {
+  try {
+    const r = await fetch(PROFILES_URL);
+    if (!r.ok) {
+      els.profileList.innerHTML =
+        '<span style="color:var(--red)">Failed to load profiles (HTTP ' +
+        escapeHtml(String(r.status)) + ')</span>';
+      return;
+    }
+    const data = await r.json();
+    const profiles = data.profiles || [];
+    populateVoiceDropdown(profiles);
+    renderProfileList(profiles);
+  } catch (err) {
+    els.profileList.innerHTML =
+      '<span style="color:var(--red)">Network error: ' + escapeHtml(err.message) + '</span>';
+  }
+}
+
+function renderProfileList(profiles) {
+  if (!profiles.length) {
+    els.profileList.innerHTML = 'No profiles registered yet.';
+    els.profileList.style.fontStyle = 'italic';
+    return;
+  }
+  els.profileList.style.fontStyle = '';
+  els.profileList.innerHTML = profiles.map(p => {
+    const created = p.created_at
+      ? new Date(p.created_at * 1000).toLocaleString()
+      : '—';
+    return (
+      '<div style="display:flex;align-items:baseline;gap:12px;padding:7px 0;' +
+             'border-bottom:1px solid rgba(48,54,61,0.4);">' +
+        '<span style="color:var(--accent);font-weight:600;min-width:120px;' +
+              'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" ' +
+              'title="' + escapeHtml(p.name) + '">' +
+          escapeHtml(p.name) + '</span>' +
+        '<span style="color:var(--muted);font-size:0.8rem;min-width:140px;">' +
+          escapeHtml(p.engine || '—') + '</span>' +
+        '<span style="color:var(--muted);font-size:0.78rem;flex:1;' +
+              'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" ' +
+              'title="' + escapeHtml(p.source_path || '') + '">' +
+          escapeHtml(p.source_path || '—') + '</span>' +
+        '<span style="color:var(--muted);font-size:0.75rem;min-width:140px;' +
+              'font-variant-numeric:tabular-nums;text-align:right;">' +
+          escapeHtml(created) + '</span>' +
+        '<button class="danger" style="padding:3px 10px;font-size:0.75rem;' +
+                'border-radius:4px;flex-shrink:0;" ' +
+                'data-name="' + escapeHtml(p.name) + '">Delete</button>' +
+      '</div>'
+    );
+  }).join('');
+
+  els.profileList.querySelectorAll('button[data-name]').forEach(btn => {
+    btn.addEventListener('click', () => deleteProfile(btn.dataset.name, btn));
+  });
+}
+
+function populateVoiceDropdown(profiles) {
+  const prev = els.testVoice.value;
+  els.testVoice.innerHTML = '';
+  if (!profiles.length) {
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = '— no profiles —';
+    els.testVoice.appendChild(opt);
+    return;
+  }
+  profiles.forEach(p => {
+    const opt = document.createElement('option');
+    opt.value = p.name;
+    opt.textContent = p.name + ' — ' + (p.engine || '?');
+    els.testVoice.appendChild(opt);
+  });
+  // Preserve selection across refreshes when possible
+  if (prev && [...els.testVoice.options].some(o => o.value === prev)) {
+    els.testVoice.value = prev;
+  }
+}
+
+// ── delete profile ────────────────────────────────────────────────────────────
+
+async function deleteProfile(name, btn) {
+  btn.disabled = true;
+  btn.textContent = '...';
+  try {
+    const r = await fetch(PROFILES_URL + '/' + encodeURIComponent(name), {
+      method: 'DELETE',
+    });
+    if (!r.ok) {
+      btn.disabled = false;
+      btn.textContent = 'Delete';
+      // Surface error briefly near the test status (nearest persistent status el)
+      setStatus(els.registerStatus,
+        'Delete failed (' + r.status + ') for "' + name + '"', 'err');
+      return;
+    }
+    await loadProfiles();
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = 'Delete';
+    setStatus(els.registerStatus, 'Delete error: ' + err.message, 'err');
+  }
+}
+
+// ── register profile ──────────────────────────────────────────────────────────
+
+async function registerProfile() {
+  const refPath     = els.refPath.value.trim();
+  const profileName = els.profileName.value.trim();
+  const engine      = els.engine.value;
+  const exaggeration = parseFloat(els.exaggeration.value);
+  const refText     = els.refText.value.trim();
+
+  if (!refPath || !profileName) {
+    setStatus(els.registerStatus,
+      'Reference audio path and profile name are required.', 'err');
+    return;
+  }
+
+  const payload = {
+    name:         profileName,
+    source_path:  refPath,
+    engine:       engine,
+    exaggeration: exaggeration,
+  };
+  if (refText) payload.ref_text = refText;
+
+  els.registerBtn.disabled = true;
+  setStatus(els.registerStatus, 'Registering...', 'warn');
+
+  try {
+    const r = await fetch(PROFILES_URL, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+
+    if (r.ok) {
+      // Clear the form
+      els.refPath.value      = '';
+      els.profileName.value  = '';
+      els.refText.value      = '';
+      setStatus(els.registerStatus, 'Registered “' + profileName + '”', 'ok');
+      await loadProfiles();
+      return;
+    }
+
+    let detail = 'HTTP ' + r.status;
+    try {
+      const body = await r.json();
+      detail = body.error || body.detail || detail;
+    } catch {}
+
+    if (r.status === 409) {
+      setStatus(els.registerStatus, 'Name already exists', 'err');
+    } else if (r.status === 404) {
+      setStatus(els.registerStatus, 'Reference audio not found', 'err');
+    } else {
+      setStatus(els.registerStatus, detail, 'err');
+    }
+  } catch (err) {
+    setStatus(els.registerStatus, 'Network error: ' + err.message, 'err');
+  } finally {
+    els.registerBtn.disabled = false;
+  }
+}
+
+// ── test / speak ──────────────────────────────────────────────────────────────
+
+async function testVoice() {
+  const text  = els.testText.value.trim();
+  const voice = els.testVoice.value;
+
+  if (!text) {
+    setStatus(els.testStatus, 'Enter some text to synthesize.', 'warn');
+    els.testText.focus();
+    return;
+  }
+  if (!voice) {
+    setStatus(els.testStatus, 'No voice profile selected.', 'warn');
+    return;
+  }
+
+  els.testBtn.disabled = true;
+  setStatus(els.testStatus, 'Generating...', 'warn');
+
+  try {
+    const r = await fetch(SYNTH_URL, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({text, voice}),
+    });
+
+    if (!r.ok) {
+      let detail = 'HTTP ' + r.status;
+      try {
+        const body = await r.json();
+        detail = body.error || body.detail || detail;
+      } catch {}
+      setStatus(els.testStatus, 'Error: ' + detail, 'err');
+      return;
+    }
+
+    const blob = await r.blob();
+    // Revoke previous object URL to avoid memory leak
+    if (els.testPlayer.dataset.objUrl) {
+      try { URL.revokeObjectURL(els.testPlayer.dataset.objUrl); } catch {}
+    }
+    const url = URL.createObjectURL(blob);
+    els.testPlayer.dataset.objUrl = url;
+    els.testPlayer.src = url;
+    try { await els.testPlayer.play(); } catch { /* autoplay blocked — user presses play */ }
+    setStatus(els.testStatus, 'Playing “' + voice + '”', 'ok');
+  } catch (err) {
+    setStatus(els.testStatus, 'Network error: ' + err.message, 'err');
+  } finally {
+    els.testBtn.disabled = false;
+  }
+}
+
+// ── wiring ────────────────────────────────────────────────────────────────────
+
+els.registerBtn.addEventListener('click', registerProfile);
+els.testBtn.addEventListener('click', testVoice);
+
+// ── boot ──────────────────────────────────────────────────────────────────────
+
+loadProfiles();
+</script>
+
+</body>
+</html>

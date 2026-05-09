@@ -48,11 +48,15 @@ from session_registry import (
 )
 from vad import detect_speech_file, is_hallucination
 from vad import is_model_loaded as vad_loaded
+from voice_profiles import VoiceProfileRegistry
 
 logger = logging.getLogger("mod3.http")
 
 _server_start_time = time.time()
 _shutting_down = False
+
+# Voice profile registry — mkdir only; no IO on import.
+_registry = VoiceProfileRegistry()
 
 
 @asynccontextmanager
@@ -160,6 +164,10 @@ def _resolve_voice_via_bus(voice: str) -> str:
         if voice in cfg["voices"]:
             return voice
 
+    # Voice profile registry surfaces cloned voices as first-class names.
+    if _registry.get(voice) is not None:
+        return voice
+
     raise ValueError(f"Unknown voice '{voice}'. Use /v1/voices to see options.")
 
 
@@ -259,6 +267,9 @@ class SynthesizeRequest(BaseModel):
     # non-default was passed), and the session is advanced in the global
     # serializer's round-robin.
     session_id: str | None = Field(default=None)
+    # Path to a reference WAV for zero-shot voice cloning. Honored by the
+    # chatterbox engine (24kHz, mono). Other engines ignore it.
+    ref_audio: str | None = Field(default=None)
 
 
 class SpeechRequest(BaseModel):
@@ -290,6 +301,16 @@ class SessionRegisterRequest(BaseModel):
     preferred_voice: str | None = Field(default=None)
     preferred_output_device: str = Field(default="system-default")
     priority: int = Field(default=0)
+
+
+class RegisterProfileRequest(BaseModel):
+    """Register a new voice profile from a reference audio file path."""
+
+    name: str
+    engine: str
+    ref_audio_path: str
+    ref_text: str | None = Field(default=None)
+    exaggeration: float = Field(default=0.5)
 
 
 # ---------------------------------------------------------------------------
@@ -385,6 +406,7 @@ def synthesize(req: SynthesizeRequest):
             speed=req.speed,
             emotion=req.emotion,
             stream=False,
+            ref_audio=req.ref_audio,
         )
     )
     t_gen_end = time.perf_counter()
@@ -713,7 +735,7 @@ def get_job(job_id: str):
 
 @app.get("/v1/voices")
 def voices():
-    """List available engines and their voices."""
+    """List available engines and their voices, including registered profiles."""
     engines = {}
     for name, cfg in MODELS.items():
         supports = []
@@ -725,11 +747,113 @@ def voices():
             supports.append("pitch")
         engines[name] = {
             "model_id": cfg["id"],
-            "voices": cfg["voices"],
+            "voices": list(cfg["voices"]),
             "default_voice": cfg["default_voice"],
             "supports": supports,
         }
+
+    # Merge registered voice profiles into their parent engine's voice list.
+    for profile in _registry.list():
+        if profile.engine not in engines:
+            continue
+        engines[profile.engine]["voices"].append(profile.name)
+        engines[profile.engine].setdefault("custom_voices", []).append(profile.name)
+
     return {"engines": engines}
+
+
+# ---------------------------------------------------------------------------
+# Voice profiles — registration, listing, deletion
+# ---------------------------------------------------------------------------
+
+
+@app.post("/v1/voices/profiles")
+def register_profile(req: RegisterProfileRequest):
+    """Register a new voice profile from a reference audio path.
+
+    The reference audio is loaded and processed through the engine's
+    prepare_conditionals step; the resulting Conditionals are stored on disk
+    alongside a metadata sidecar. This may be slow on first call if the
+    chatterbox model is not yet loaded.
+
+    Returns the registered profile as JSON (200), or:
+      409 if a profile with that name already exists,
+      404 if ref_audio_path does not exist,
+      400 for validation errors (invalid name, engine not supported, etc.).
+    """
+    from fastapi import HTTPException
+
+    from engine import get_model
+
+    # Resolve model_id from engine registry.
+    engine_cfg = MODELS.get(req.engine)
+    if engine_cfg is None or not engine_cfg.get("supports_cloning"):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"engine {req.engine!r} does not support voice cloning; "
+                f"supported engines: {[k for k, v in MODELS.items() if v.get('supports_cloning')]}"
+            ),
+        )
+
+    import pathlib
+
+    if not pathlib.Path(req.ref_audio_path).exists():
+        raise HTTPException(status_code=404, detail=f"ref_audio_path not found: {req.ref_audio_path}")
+
+    # Check for duplicate before loading the model (cheaper).
+    existing = _registry.get(req.name)
+    if existing is not None:
+        raise HTTPException(status_code=409, detail=f"profile {req.name!r} already exists")
+
+    try:
+        model = get_model(req.engine)
+        # Chatterbox requires ref_sr (positional int) and RETURNS the
+        # Conditionals. Turbo uses sample_rate (autodetect when None) and
+        # STORES to self._conds rather than returning. Handle both shapes.
+        if req.engine == "chatterbox-turbo":
+            model.prepare_conditionals(req.ref_audio_path, exaggeration=req.exaggeration)
+            conds = model._conds
+        else:
+            conds = model.prepare_conditionals(req.ref_audio_path, ref_sr=24000, exaggeration=req.exaggeration)
+        if conds is None:
+            raise RuntimeError(f"prepare_conditionals returned None and model._conds is None for engine {req.engine}")
+        profile = _registry.register(
+            name=req.name,
+            engine=req.engine,
+            ref_audio_path=req.ref_audio_path,
+            conds=conds,
+            ref_text=req.ref_text,
+            exaggeration=req.exaggeration,
+            model_id=engine_cfg["id"],
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        msg = str(exc)
+        if "already exists" in msg:
+            raise HTTPException(status_code=409, detail=msg) from exc
+        raise HTTPException(status_code=400, detail=msg) from exc
+
+    return profile.to_json()
+
+
+@app.get("/v1/voices/profiles")
+def list_profiles():
+    """List all registered voice profiles."""
+    return {"profiles": [p.to_json() for p in _registry.list()]}
+
+
+@app.delete("/v1/voices/profiles/{name}")
+def delete_profile(name: str):
+    """Remove a voice profile by name."""
+    removed = _registry.delete(name)
+    if not removed:
+        return JSONResponse(
+            status_code=404,
+            content={"deleted": False, "error": "not found"},
+        )
+    return {"deleted": True}
 
 
 @app.post("/v1/stop")

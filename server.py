@@ -814,6 +814,7 @@ def _run_speech_job(entry: dict) -> None:
     streaming_interval = entry.get("streaming_interval", 1.0)
     speed = entry.get("speed", 1.0)
     emotion = entry.get("emotion", 0.5)
+    ref_audio = entry.get("ref_audio")
 
     try:
         engine_module = _engine_module()
@@ -863,6 +864,7 @@ def _run_speech_job(entry: dict) -> None:
             streaming_interval=streaming_interval,
             speed=speed,
             emotion=emotion,
+            ref_audio=ref_audio,
         ):
             # If we held the cross-process lock and lost it (file gone or
             # pid no longer matches), the bargein watcher decided we should
@@ -928,6 +930,7 @@ def _start_speech(
     speed: float = 1.0,
     emotion: float = 0.5,
     session_id: str | None = None,
+    ref_audio: str | None = None,
 ) -> tuple[str, int]:
     """Submit speech to the queue. Returns (job_id, queue_position).
 
@@ -967,6 +970,8 @@ def _start_speech(
     }
     if session_id:
         entry["session_id"] = session_id
+    if ref_audio:
+        entry["ref_audio"] = ref_audio
     position = _speech_queue.enqueue(job_id, entry)
     return job_id, position
 
@@ -1018,6 +1023,7 @@ def speak(
     speed: float = 1.25,
     emotion: float = 0.5,
     session_id: str = "",
+    ref_audio: str = "",
 ) -> str:
     """Synthesize text to speech and play it through the user's speakers.
 
@@ -1106,6 +1112,7 @@ def speak(
             speed=speed,
             emotion=emotion,
             session_id=effective_session_id,
+            ref_audio=ref_audio or None,
         )
     except ValueError as e:
         return json.dumps({"status": "error", "error": str(e)})
