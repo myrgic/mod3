@@ -1,18 +1,22 @@
-"""Save/load helpers for Chatterbox Conditionals dataclass (safetensors format)."""
+"""Save/load helpers for Chatterbox Conditionals dataclass (safetensors format).
+
+mlx and mlx_audio imports are deferred to function scope so this module can be
+imported on platforms without MLX installed (e.g. Linux CI runners that only
+exercise the import surface, or environments doing schema-level work without
+running inference).
+"""
 
 import pathlib
-from typing import Union
-
-import mlx.core as mx
-from mlx_audio.tts.models.chatterbox.chatterbox import Conditionals
-from mlx_audio.tts.models.chatterbox.t3.cond_enc import T3Cond
+from typing import Any, Union
 
 # T3Cond optional fields — serialized only when present
 _T3_OPTIONAL = ("clap_emb", "cond_prompt_speech_tokens", "cond_prompt_speech_emb", "emotion_adv")
 
 
-def _flatten(conds: Conditionals) -> dict:
+def _flatten(conds: Any) -> dict:
     """Flatten Conditionals into a dict[str, mx.array] with prefixed keys."""
+    import mlx.core as mx
+
     flat: dict = {}
 
     # --- t3 fields ---
@@ -30,8 +34,11 @@ def _flatten(conds: Conditionals) -> dict:
     return flat
 
 
-def _unflatten(flat: dict) -> Conditionals:
+def _unflatten(flat: dict) -> Any:
     """Reconstruct a Conditionals from the flat prefixed dict produced by _flatten."""
+    from mlx_audio.tts.models.chatterbox.chatterbox import Conditionals
+    from mlx_audio.tts.models.chatterbox.t3.cond_enc import T3Cond
+
     t3_kwargs: dict = {"speaker_emb": flat["t3.speaker_emb"]}
     for field in _T3_OPTIONAL:
         prefixed = f"t3.{field}"
@@ -43,19 +50,27 @@ def _unflatten(flat: dict) -> Conditionals:
     return Conditionals(t3=T3Cond(**t3_kwargs), gen=gen)
 
 
-def save_conditionals(conds: Conditionals, dest: Union[pathlib.Path, str]) -> None:
+def save_conditionals(conds: Any, dest: Union[pathlib.Path, str]) -> None:
     """Serialize a Chatterbox Conditionals dataclass to safetensors at dest."""
+    import mlx.core as mx
+
     mx.save_safetensors(str(dest), _flatten(conds))
 
 
-def load_conditionals(src: Union[pathlib.Path, str]) -> Conditionals:
+def load_conditionals(src: Union[pathlib.Path, str]) -> Any:
     """Reconstruct a Conditionals dataclass from a safetensors file written by save_conditionals."""
+    import mlx.core as mx
+
     flat = mx.load(str(src))
     return _unflatten(flat)
 
 
 if __name__ == "__main__":
     import tempfile
+
+    import mlx.core as mx
+    from mlx_audio.tts.models.chatterbox.chatterbox import Conditionals
+    from mlx_audio.tts.models.chatterbox.t3.cond_enc import T3Cond
 
     # Build a synthetic Conditionals by hand to verify roundtrip without a model load.
     t3 = T3Cond(
