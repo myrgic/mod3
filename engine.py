@@ -122,6 +122,18 @@ class AudioChunk:
     metadata: dict
 
 
+# Spark's mlx_audio backend implements speed (and pitch) as a lookup into a
+# fixed map of {0.0, 0.5, 1.0, 1.5, 2.0} -> {very_low, low, moderate, high,
+# very_high}. Any other value raises KeyError. Mod³'s default speak() speed
+# of 1.25 (tuned for Kokoro) hit this on every Spark call. Snap to the
+# nearest discrete value before dispatch.
+_SPARK_DISCRETE_SPEEDS = (0.0, 0.5, 1.0, 1.5, 2.0)
+
+
+def _snap_to_spark_discrete(speed: float) -> float:
+    return min(_SPARK_DISCRETE_SPEEDS, key=lambda v: abs(v - speed))
+
+
 # ---------------------------------------------------------------------------
 # Generation
 # ---------------------------------------------------------------------------
@@ -151,7 +163,7 @@ def generate_audio(
             gen_kwargs["streaming_interval"] = streaming_interval
         elif engine == "spark":
             gen_kwargs["gender"] = "female" if voice == "spark_female" else "male"
-            gen_kwargs["speed"] = speed
+            gen_kwargs["speed"] = _snap_to_spark_discrete(speed)
         else:
             gen_kwargs["voice"] = voice
             if cfg.get("supports_speed"):
