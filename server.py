@@ -653,9 +653,23 @@ _current_player_lock = threading.Lock()
 
 
 def _prune_jobs():
-    """Keep only the last MAX_JOBS entries."""
+    """Keep only the last MAX_JOBS entries, but never evict an in-flight job.
+
+    Evicting a job whose `_run_speech_job` worker is still writing to it would
+    raise KeyError on the post-completion `_jobs[job_id]["metrics"] = result`
+    assignment, which then kills the SpeechQueue drain thread (it has no
+    catch-all) and leaves later jobs stuck in queue with no processor.
+    """
+    in_flight = {"queued", "speaking"}
+    # Walk in insertion order; pop the oldest non-in-flight entry per iteration.
     while len(_jobs) > MAX_JOBS:
-        _jobs.popitem(last=False)
+        for jid in list(_jobs):
+            if _jobs[jid].get("status") not in in_flight:
+                del _jobs[jid]
+                break
+        else:
+            # All remaining entries are in-flight; nothing safe to evict.
+            return
 
 
 # ---------------------------------------------------------------------------
@@ -734,8 +748,18 @@ class SpeechQueue:
                 entry = self._queue.pop(0)
                 self._active_job_id = entry["job_id"]
 
-            # Run the speech job (blocking — one at a time)
-            _run_speech_job(entry)
+            # Run the speech job (blocking — one at a time). A failure here
+            # must not kill the drain thread: if it does, `_draining` stays
+            # True and subsequent enqueues never start a new drain, so jobs
+            # accumulate in the queue with no processor.
+            try:
+                _run_speech_job(entry)
+            except Exception as exc:
+                logger.exception(
+                    "speech_queue: drain caught unhandled %s in _run_speech_job for %s",
+                    type(exc).__name__,
+                    entry.get("job_id"),
+                )
 
 
 _speech_queue = SpeechQueue()
@@ -873,16 +897,22 @@ def _run_speech_job(entry: dict) -> None:
     result = metrics.to_dict()
     result["engine"] = engine
     result["voice"] = resolved_voice
-    _jobs[job_id]["metrics"] = result
-    _jobs[job_id]["status"] = "error" if _jobs[job_id]["error"] else "done"
     _last_metrics = result
+    # _prune_jobs skips in-flight entries, so the job_id should still be here.
+    # Guard anyway: if some other path removes the job mid-run, finalize bus
+    # state but skip the dict updates instead of crashing the drain thread.
+    job = _jobs.get(job_id)
+    error = job.get("error") if job else None
+    if job is not None:
+        job["metrics"] = result
+        job["status"] = "error" if error else "done"
     _set_bus_voice_state(
-        status=ModuleStatus.ERROR if _jobs[job_id]["error"] else ModuleStatus.IDLE,
+        status=ModuleStatus.ERROR if error else ModuleStatus.IDLE,
         active_job=None,
         current_text="",
-        progress=1.0 if not _jobs[job_id]["error"] else 0.0,
+        progress=1.0 if not error else 0.0,
         last_output_text=text[:100],
-        error=_jobs[job_id]["error"],
+        error=error,
     )
 
     with _current_player_lock:
