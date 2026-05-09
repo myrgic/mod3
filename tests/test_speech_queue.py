@@ -273,3 +273,108 @@ class TestSpeechStatusReturnFormat:
             assert "currently_playing" in result["queue"]
         finally:
             _jobs.pop("testjob1", None)
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for queue-stability fixes
+# ---------------------------------------------------------------------------
+
+
+class TestPruneJobsInFlightProtection:
+    """_prune_jobs must never evict a job whose worker is still running.
+
+    Regression: stress-testing 35+ parallel speak() calls hit MAX_JOBS=20,
+    causing _prune_jobs to evict in-flight jobs. Subsequent
+    `_jobs[job_id]["metrics"] = result` then KeyErrored, killing the drain
+    thread and stranding the queue.
+    """
+
+    def test_prune_skips_speaking_and_queued_jobs(self):
+        from server import MAX_JOBS, _jobs, _prune_jobs
+
+        original = dict(_jobs)
+        _jobs.clear()
+        try:
+            # Fill past MAX_JOBS with done jobs (evictable) and a few in-flight.
+            for i in range(MAX_JOBS - 2):
+                _jobs[f"done{i}"] = {"status": "done", "error": None}
+            _jobs["live1"] = {"status": "speaking", "error": None}
+            _jobs["live2"] = {"status": "queued", "error": None}
+            for i in range(5):
+                _jobs[f"trailing{i}"] = {"status": "done", "error": None}
+
+            _prune_jobs()
+
+            assert len(_jobs) == MAX_JOBS, f"len={len(_jobs)}, want {MAX_JOBS}"
+            assert "live1" in _jobs, "speaking job got evicted"
+            assert "live2" in _jobs, "queued job got evicted"
+        finally:
+            _jobs.clear()
+            _jobs.update(original)
+
+    def test_prune_returns_when_only_in_flight_remain(self):
+        """If every entry is in-flight, prune accepts transient over-cap."""
+        from server import MAX_JOBS, _jobs, _prune_jobs
+
+        original = dict(_jobs)
+        _jobs.clear()
+        try:
+            for i in range(MAX_JOBS + 3):
+                _jobs[f"speaking{i}"] = {"status": "speaking", "error": None}
+
+            _prune_jobs()  # should not raise; should not deadlock.
+
+            assert len(_jobs) == MAX_JOBS + 3, "over-cap entries should be kept"
+        finally:
+            _jobs.clear()
+            _jobs.update(original)
+
+
+class TestDrainExceptionResilience:
+    """The drain thread must survive a job-runner exception.
+
+    Regression: an unhandled KeyError inside _run_speech_job killed the drain
+    loop, leaving _draining=True with no live drainer. Later enqueues then
+    saw _draining=True and never started a new drain.
+    """
+
+    def test_drain_continues_after_job_raises(self):
+        import server
+
+        original_runner = server._run_speech_job
+        completed: list[str] = []
+        seen: list[str] = []
+
+        def fake_runner(entry):
+            jid = entry["job_id"]
+            seen.append(jid)
+            if jid == "boom":
+                raise RuntimeError("simulated job failure")
+            completed.append(jid)
+
+        server._run_speech_job = fake_runner
+        try:
+            from server import SpeechQueue
+
+            q = SpeechQueue()
+            q.enqueue("first", {})
+            q.enqueue("boom", {})
+            q.enqueue("third", {})
+
+            # Wait for drain to process all three (or time out).
+            for _ in range(50):
+                if not q._draining:
+                    break
+                time.sleep(0.05)
+
+            assert seen == ["first", "boom", "third"], (
+                f"drain stopped early: saw {seen}"
+            )
+            assert "third" in completed, (
+                "drain did not run the third job after the second raised"
+            )
+            assert q._draining is False, (
+                "drain thread leaked _draining=True after queue empty"
+            )
+        finally:
+            server._run_speech_job = original_runner
