@@ -259,6 +259,9 @@ class SynthesizeRequest(BaseModel):
     # non-default was passed), and the session is advanced in the global
     # serializer's round-robin.
     session_id: str | None = Field(default=None)
+    # Path to a reference WAV for zero-shot voice cloning. Honored by the
+    # chatterbox engine (24kHz, mono). Other engines ignore it.
+    ref_audio: str | None = Field(default=None)
 
 
 class SpeechRequest(BaseModel):
@@ -385,6 +388,7 @@ def synthesize(req: SynthesizeRequest):
             speed=req.speed,
             emotion=req.emotion,
             stream=False,
+            ref_audio=req.ref_audio,
         )
     )
     t_gen_end = time.perf_counter()

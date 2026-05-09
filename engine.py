@@ -66,6 +66,14 @@ MODELS = {
         "voices": ["chatterbox"],
         "default_voice": "chatterbox",
         "supports_exaggeration": True,
+        "supports_cloning": True,
+    },
+    "chatterbox-turbo": {
+        "id": "mlx-community/chatterbox-turbo-fp16",
+        "voices": ["chatterbox-turbo"],
+        "default_voice": "chatterbox-turbo",
+        "supports_exaggeration": True,
+        "supports_cloning": True,
     },
     "spark": {
         "id": "mlx-community/Spark-TTS-0.5B-bf16",
@@ -146,8 +154,14 @@ def generate_audio(
     emotion: float = 0.5,
     stream: bool = True,
     streaming_interval: float = 1.0,
+    ref_audio: str | None = None,
 ) -> Iterator[AudioChunk]:
-    """Yield AudioChunks for the given text. Core generation pipeline."""
+    """Yield AudioChunks for the given text. Core generation pipeline.
+
+    ref_audio is a path to a reference WAV for zero-shot voice cloning.
+    Currently honored only on the chatterbox engine, which clones the
+    reference speaker via prepare_conditionals → generate(audio_prompt=...).
+    """
     engine, voice = resolve_model(voice)
     model = get_model(engine)
     sample_rate = model.sample_rate
@@ -157,10 +171,12 @@ def generate_audio(
     for si, sentence in enumerate(sentences):
         gen_kwargs: dict[str, object] = dict(text=sentence, verbose=False)
         cfg = MODELS[engine]
-        if engine == "chatterbox":
+        if engine in ("chatterbox", "chatterbox-turbo"):
             gen_kwargs["exaggeration"] = emotion
             gen_kwargs["stream"] = stream
             gen_kwargs["streaming_interval"] = streaming_interval
+            if ref_audio:
+                gen_kwargs["ref_audio"] = ref_audio
         elif engine == "spark":
             gen_kwargs["gender"] = "female" if voice == "spark_female" else "male"
             gen_kwargs["speed"] = _snap_to_spark_discrete(speed)
