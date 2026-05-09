@@ -3,6 +3,7 @@
 No MCP or playback dependencies. Takes text + params, yields numpy audio chunks.
 """
 
+import logging
 import threading
 from dataclasses import dataclass
 from typing import Iterator
@@ -11,6 +12,28 @@ import numpy as np
 import pysbd
 
 _segmenter = pysbd.Segmenter(language="en", clean=False)
+_log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Voice profile registry (lazy — imported only on first use)
+# ---------------------------------------------------------------------------
+
+_profile_registry = None
+
+
+def _get_profile_registry():
+    """Lazy-init the VoiceProfileRegistry to avoid an import cycle at module load."""
+    global _profile_registry
+    if _profile_registry is None:
+        try:
+            from voice_profiles import VoiceProfileRegistry  # noqa: PLC0415
+
+            _profile_registry = VoiceProfileRegistry()
+        except Exception as exc:
+            _log.warning("voice profile registry unavailable: %s", exc)
+            return None
+    return _profile_registry
+
 
 # ---------------------------------------------------------------------------
 # Model registry
@@ -95,7 +118,19 @@ def split_sentences(text: str) -> list[str]:
 
 
 def resolve_model(voice: str) -> tuple[str, str]:
-    """Given a voice name, return (engine_name, voice) or raise."""
+    """Given a voice name, return (engine_name, voice) or raise.
+
+    Checks the voice profile registry first. If ``voice`` is a registered
+    profile name, returns the profile's parent engine so the chatterbox
+    dispatch branch can load its cached Conditionals.  Falls through to the
+    built-in MODELS voice list when no matching profile exists.
+    """
+    registry = _get_profile_registry()
+    if registry is not None:
+        profile = registry.get(voice)
+        if profile is not None:
+            return profile.engine, voice
+
     for engine, cfg in MODELS.items():
         if voice in cfg["voices"]:
             return engine, voice
@@ -175,7 +210,14 @@ def generate_audio(
             gen_kwargs["exaggeration"] = emotion
             gen_kwargs["stream"] = stream
             gen_kwargs["streaming_interval"] = streaming_interval
-            if ref_audio:
+
+            # Profile-aware: if voice is a registered profile, prefer its cached
+            # Conditionals over re-encoding ref_audio.
+            registry = _get_profile_registry()
+            profile_conds = registry.get_conditionals(voice) if registry is not None and registry.get(voice) else None
+            if profile_conds is not None:
+                gen_kwargs["conds"] = profile_conds
+            elif ref_audio:
                 gen_kwargs["ref_audio"] = ref_audio
         elif engine == "spark":
             gen_kwargs["gender"] = "female" if voice == "spark_female" else "male"
