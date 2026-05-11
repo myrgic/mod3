@@ -125,6 +125,16 @@ async def _lifespan(application: FastAPI):
     except Exception as e:  # noqa: BLE001
         logger.debug("bus-bridge shutdown error (non-fatal): %s", e)
 
+    # 1. Drain and shut down the dedicated STT executor (§4 of ARCHITECTURE.md).
+    #    Allows any in-flight mlx_whisper.transcribe() to finish before exit.
+    try:
+        from channels import shutdown_stt_executor
+
+        shutdown_stt_executor(wait=True)
+        logger.debug("STT executor shut down")
+    except Exception as e:  # noqa: BLE001
+        logger.debug("STT executor shutdown error (non-fatal): %s", e)
+
 
 app = FastAPI(
     title="Mod³",
