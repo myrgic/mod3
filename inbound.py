@@ -55,6 +55,7 @@ class InboundPipeline:
         sample_rate: int = 16000,
         min_silence_duration_sec: float = 0.5,
         loop_sleep_sec: float = 0.05,
+        bargein_registry=None,
     ):
         self._bus = bus
         self._pipeline_state = pipeline_state
@@ -65,6 +66,11 @@ class InboundPipeline:
         self._sample_rate = sample_rate
         self._min_silence_sec = min_silence_duration_sec
         self._loop_sleep_sec = loop_sleep_sec
+        # Optional BargeinRegistry — when provided, VAD trigger dispatches a
+        # ``user_speaking_start`` event directly (in addition to the
+        # ``pipeline_state.interrupt()`` reflex), removing dependence on the
+        # ``/tmp/mod3-barge-in.json`` file watcher for in-process consumers.
+        self._bargein_registry = bargein_registry
 
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
@@ -160,6 +166,24 @@ class InboundPipeline:
                     interrupt_info.spoken_pct * 100,
                     interrupt_info.reason,
                 )
+
+        # 3b. Dispatch a barge-in start event into the registry (if wired),
+        # so in-process subscribers and the file mirror see the same signal
+        # the legacy /tmp/mod3-barge-in.json watcher produces. Lower latency
+        # than waiting for an external producer to write the signal file.
+        if self._bargein_registry is not None:
+            try:
+                from bargein.providers.base import BargeinEvent
+
+                self._bargein_registry._dispatch(
+                    BargeinEvent(
+                        source="mic_vad",
+                        event_type="user_speaking_start",
+                        metadata={"speech_ratio": round(vad_result.speech_ratio, 2)},
+                    )
+                )
+            except Exception:
+                logger.exception("failed to dispatch barge-in event from inbound pipeline")
 
         # 4. Accumulate audio until utterance boundary (silence window)
         utterance, final_vad = self._accumulate_utterance(chunk, vad_result)
