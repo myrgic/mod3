@@ -42,7 +42,6 @@ from modality import (  # noqa: E402
 )
 from output_queue import OutputQueueManager  # noqa: E402
 
-
 # ---------------------------------------------------------------------------
 # Bus-level fixtures: unregister_channel + drop_queue
 # ---------------------------------------------------------------------------
