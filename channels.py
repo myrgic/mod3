@@ -28,6 +28,7 @@ import json
 import logging
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Awaitable, Callable
 
 import numpy as np
@@ -39,6 +40,37 @@ from modules.voice import WhisperDecoder
 from pipeline_state import PipelineState
 
 logger = logging.getLogger("mod3.channels")
+
+# ---------------------------------------------------------------------------
+# Dedicated STT executor — isolated from the asyncio default thread pool.
+#
+# mlx_whisper.transcribe() is 1-2s CPU-bound on the ANE/GPU.  Running it on
+# asyncio.to_thread() consumes a slot from the default pool, which is also
+# used by bus.act() drain threads and every other to_thread call in the
+# server.  Under concurrent load that starves those callers.
+#
+# Fix (§4 of ARCHITECTURE.md): a single-worker ThreadPoolExecutor dedicated
+# to STT.  STT jobs serialise here (only one MLX graph in flight at a time
+# anyway), leaving the default pool free for everything else.
+#
+# Lifecycle: created at module import; shut down by shutdown_stt_executor()
+# which is called from the FastAPI lifespan teardown in http_api.py.
+# ---------------------------------------------------------------------------
+
+_STT_EXECUTOR: ThreadPoolExecutor = ThreadPoolExecutor(
+    max_workers=1,
+    thread_name_prefix="mod3-stt",
+)
+
+
+def shutdown_stt_executor(wait: bool = True) -> None:
+    """Shut down the module-level STT executor.
+
+    Called from the FastAPI lifespan teardown so in-flight STT jobs are
+    allowed to finish before the process exits.  Pass ``wait=False`` for
+    tests that need a non-blocking teardown.
+    """
+    _STT_EXECUTOR.shutdown(wait=wait)
 
 
 class BrowserChannel:
@@ -227,7 +259,8 @@ class BrowserChannel:
             return self._streaming_decoder.decode_streaming(audio, tier="t1")
 
         try:
-            result = await asyncio.to_thread(_transcribe_t1)
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(_STT_EXECUTOR, _transcribe_t1)
             if result and result.get("changed") and not result.get("filtered"):
                 await self.ws.send_json(
                     {
@@ -259,7 +292,8 @@ class BrowserChannel:
             return self._streaming_decoder.decode_streaming(audio, tier="t2")
 
         try:
-            result = await asyncio.to_thread(_transcribe_t2)
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(_STT_EXECUTOR, _transcribe_t2)
             if result and not result.get("filtered"):
                 await self.ws.send_json(
                     {
@@ -373,7 +407,8 @@ class BrowserChannel:
             finally:
                 os.unlink(tmp_path)
 
-        event = await asyncio.to_thread(_transcribe)
+        loop = asyncio.get_event_loop()
+        event = await loop.run_in_executor(_STT_EXECUTOR, _transcribe)
 
         stt_ms = (time.perf_counter() - t0) * 1000
 

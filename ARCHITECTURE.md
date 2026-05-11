@@ -127,7 +127,7 @@ OutputQueue drain thread:
 
 **Status (2026-05-11):** Resolved by PR #22. `server.py::_prewarm_tts_if_enabled()` fires a daemon thread on startup that calls `engine.synthesize("warmup", voice="bm_lewis", speed=1.25)` once, paying the Kokoro cold-start cost up front. Env-gated by `MOD3_PREWARM_TTS=1` (default on). Known caveat: if the user's configured default is a non-Kokoro engine (e.g., Voxtral), Kokoro still cold-starts on the first real call — follow-up is to read the configured default at pre-warm time.
 
-### 3. WebSocket lifecycle fragility
+### 3. ~~WebSocket lifecycle fragility~~ — RESOLVED
 
 ```
 Browser page reload → new WebSocket → new BrowserChannel
@@ -136,10 +136,9 @@ Browser page reload → new WebSocket → new BrowserChannel
   → sends to dead WebSocket → timeout → error cascade
 ```
 
-**Should be:** channel cleanup on disconnect should cancel all queued jobs
-for that channel.
+**Status (2026-05-11):** Resolved by PR #24. `BrowserChannel._cleanup()` now cancels all queued jobs via `bus._queue_manager.cancel_channel`, then calls `bus.unregister_channel` which severs the `ch.deliver` callback and drops the `ChannelQueue`. Any drain-thread job already past the cancel point hits the `if ch and ch.deliver` guard in `bus.act`'s `_do_encode` and skips delivery silently. `BrowserChannel._active_channels` is pruned in the same cleanup path. Regression-tested by `tests/test_websocket_lifecycle_cleanup.py`.
 
-### 4. STT blocks the event loop context
+### 4. ~~STT blocks the event loop context~~ — RESOLVED
 
 ```
 _process_utterance():
@@ -148,7 +147,9 @@ _process_utterance():
     → blocks one thread pool slot
 ```
 
-This is fine for one user. But the thread pool is shared with bus.act().
+The thread pool is shared with bus.act() — a 1-2s STT call starves concurrent TTS encode jobs under load.
+
+**Status (2026-05-11):** Resolved. `channels.py` now creates a dedicated `ThreadPoolExecutor(max_workers=1, thread_name_prefix="mod3-stt")` at module import (`_STT_EXECUTOR`). All three STT dispatch sites (`_run_t1`, `_run_t2`, `_process_utterance`) call `loop.run_in_executor(_STT_EXECUTOR, ...)` instead of `asyncio.to_thread(...)`. The default pool is left free for `bus.act()` drain threads and other I/O. The executor is shut down gracefully from the FastAPI lifespan teardown via `channels.shutdown_stt_executor(wait=True)`. Regression-tested by `tests/test_stt_executor_isolation.py`.
 
 ### 5. No separation between thinking and acting
 
