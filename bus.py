@@ -107,6 +107,35 @@ class ModalityBus:
         self._channels[channel_id] = ChannelDescriptor(channel_id, modalities, deliver)
         logger.info(f"registered channel: {channel_id} ({[m.value for m in modalities]})")
 
+    def unregister_channel(self, channel_id: str) -> bool:
+        """Detach a channel from the bus.
+
+        Severs the deliver callback (so any in-flight encode job that has
+        already popped from the queue finds no callback to invoke), removes
+        the ChannelDescriptor, and drops the per-channel OutputQueue. Caller
+        is expected to have already cancelled any queued jobs via
+        ``_queue_manager.cancel_channel`` before calling this; this method
+        is safe to call regardless. Returns True if the channel was
+        registered (and is now removed), False otherwise.
+
+        Used by channel adapters (e.g. BrowserChannel) on disconnect to
+        prevent stale callback references from leaking the dead channel
+        across browser page reloads.
+        """
+        ch = self._channels.pop(channel_id, None)
+        if ch is None:
+            self._queue_manager.drop_queue(channel_id)
+            return False
+        # Sever the callback first — any concurrent drain thread that already
+        # popped a job and is between the encode() call and ch.deliver(output)
+        # will see deliver=None and skip delivery instead of writing to a
+        # dead WebSocket.
+        ch.deliver = None
+        ch.active = False
+        self._queue_manager.drop_queue(channel_id)
+        logger.info("unregistered channel: %s", channel_id)
+        return True
+
     def on_event(self, listener: Callable[[BusEvent], None]) -> None:
         """Subscribe to bus events (for ledger integration)."""
         self._listeners.append(listener)
