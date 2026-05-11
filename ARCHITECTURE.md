@@ -104,7 +104,7 @@
 
 ## Current Problems
 
-### 1. Agent blocks on TTS delivery
+### 1. ~~Agent blocks on TTS delivery~~ — RESOLVED
 
 ```
 agent_loop._process():
@@ -113,10 +113,9 @@ agent_loop._process():
   # agent can't process next event until TTS finishes
 ```
 
-**Should be:** fire-and-forget the bus.act() intent, return immediately.
-bus.act(blocking=False) already returns QueuedJob — just don't await the result.
+**Status (2026-05-11):** Resolved. `agent_loop.py:259` and `:283` call `self.bus.act(intent, channel=self.channel_id)` synchronously without `await asyncio.to_thread`, relying on `bus.act`'s default `blocking=False` which returns `QueuedJob` immediately. The PR-#22 review explicitly verified this; the snippet above describes a problem state that no longer matches the code.
 
-### 2. Kokoro cold start blocks OutputQueue drain thread
+### 2. ~~Kokoro cold start blocks OutputQueue drain thread~~ — RESOLVED
 
 ```
 OutputQueue drain thread:
@@ -126,7 +125,7 @@ OutputQueue drain thread:
     → _deliver_sync timeout (10s) fires on older jobs
 ```
 
-**Should be:** pre-warm Kokoro on server startup (background thread).
+**Status (2026-05-11):** Resolved by PR #22. `server.py::_prewarm_tts_if_enabled()` fires a daemon thread on startup that calls `engine.synthesize("warmup", voice="bm_lewis", speed=1.25)` once, paying the Kokoro cold-start cost up front. Env-gated by `MOD3_PREWARM_TTS=1` (default on). Known caveat: if the user's configured default is a non-Kokoro engine (e.g., Voxtral), Kokoro still cold-starts on the first real call — follow-up is to read the configured default at pre-warm time.
 
 ### 3. WebSocket lifecycle fragility
 
