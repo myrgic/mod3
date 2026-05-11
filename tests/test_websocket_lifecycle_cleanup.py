@@ -158,9 +158,7 @@ def test_in_flight_encode_after_unregister_skips_delivery():
     bus.register(_DummyVoiceModule())
 
     delivered: list[EncodedOutput] = []
-    bus.register_channel(
-        "ch-leak", [ModalityType.VOICE], deliver=lambda o: delivered.append(o)
-    )
+    bus.register_channel("ch-leak", [ModalityType.VOICE], deliver=lambda o: delivered.append(o))
 
     # Disconnect: unregister the channel while a "job" is mid-flight.
     bus.unregister_channel("ch-leak")
@@ -284,9 +282,7 @@ def test_browser_channel_disconnect_cleans_up_all_state():
         assert ch._active is False, "channel must mark itself inactive"
         assert ch not in BrowserChannel._active_channels, "must leave broadcast set"
         assert channel_id not in bus._channels, "must drop ChannelDescriptor"
-        assert (
-            channel_id not in bus._queue_manager._queues
-        ), "must drop ChannelQueue from manager"
+        assert channel_id not in bus._queue_manager._queues, "must drop ChannelQueue from manager"
         # cancel_channel ran before drop_queue, so any pending jobs were
         # cancelled. The drain thread's current in-progress _slow_job is
         # still running (we can't interrupt the worker mid-sleep), but it
