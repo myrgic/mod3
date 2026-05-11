@@ -1817,9 +1817,10 @@ def _run_http(host: str = "0.0.0.0", port: int = 7860):
     from http_api import app
 
     install_mcp_route(app)
-    inbound_pipeline = _start_inbound_pipeline_if_enabled()
-    _prewarm_tts_if_enabled()
+    inbound_pipeline: Any | None = None
     try:
+        inbound_pipeline = _start_inbound_pipeline_if_enabled()
+        _prewarm_tts_if_enabled()
         uvicorn.run(app, host=host, port=port, log_level="info")
     finally:
         if inbound_pipeline is not None:
