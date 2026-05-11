@@ -154,6 +154,19 @@ def _resolve_voice_via_bus(voice: str) -> tuple[str, str]:
     if voice_module is None or voice_module.encoder is None:
         raise ValueError("Voice module is not registered on the ModalityBus.")
 
+    # Check the voice profile registry first so cloned voices resolve
+    # before falling through to the built-in MODELS voice list.
+    # Mirrors engine.resolve_model() which the HTTP /v1/synthesize path uses.
+    try:
+        from voice_profiles import VoiceProfileRegistry  # noqa: PLC0415
+
+        registry = VoiceProfileRegistry()
+        profile = registry.get(voice)
+        if profile is not None:
+            return profile.engine, voice
+    except Exception:
+        pass  # profile registry unavailable -- fall through to built-in list
+
     for engine_name, cfg in _model_registry().items():
         if voice in cfg["voices"]:
             return engine_name, voice
@@ -1736,6 +1749,67 @@ def install_mcp_route(app) -> None:
     mcp._mod3_route_installed = True
 
 
+def _start_inbound_pipeline_if_enabled() -> Any | None:
+    """Start the server-side inbound mic → VAD → STT pipeline (env-gated).
+
+    Default-on so the MCP/HTTP-tier path gets bidirectional audio without
+    manual opt-in; the dashboard already has its own in-browser VAD so this
+    is purely additive. Disable with ``MOD3_INBOUND_ENABLED=0``.
+
+    Returns the started InboundPipeline (so the caller can stop it on
+    shutdown) or ``None`` when disabled / import failed. Mic access errors
+    are swallowed at the warning level — server startup must not abort just
+    because no microphone is present.
+    """
+    raw = os.environ.get("MOD3_INBOUND_ENABLED", "1").strip().lower()
+    enabled = raw not in {"0", "false", "no", "off"}
+    if not enabled:
+        logger.info("MOD3_INBOUND_ENABLED=%s — inbound pipeline disabled", raw)
+        return None
+
+    try:
+        from inbound import InboundPipeline
+
+        pipeline = InboundPipeline(
+            bus=_bus,
+            pipeline_state=pipeline_state,
+            bargein_registry=_bargein_registry,
+        )
+        pipeline.start()
+        logger.info("inbound voice pipeline started (mic → VAD → STT)")
+        return pipeline
+    except Exception:
+        logger.warning("inbound pipeline failed to start; continuing without mic input", exc_info=True)
+        return None
+
+
+def _prewarm_tts_if_enabled() -> None:
+    """Fire-and-forget Kokoro pre-warm so the first real synthesize call is fast.
+
+    First-time Kokoro init can take ~60s; deferring that to the first
+    user-facing synthesize causes the OutputQueue to stall and the per-job
+    delivery timer to fire on older jobs. Doing one throwaway synthesize on
+    a background thread at boot pays the cold-start cost up front. Disable
+    with ``MOD3_PREWARM_TTS=0``.
+    """
+    raw = os.environ.get("MOD3_PREWARM_TTS", "1").strip().lower()
+    if raw in {"0", "false", "no", "off"}:
+        logger.info("MOD3_PREWARM_TTS=%s — Kokoro pre-warm disabled", raw)
+        return
+
+    def _warm():
+        try:
+            from engine import synthesize
+
+            t0 = time.time()
+            synthesize("warmup", voice="bm_lewis", speed=1.25)
+            logger.info("Kokoro pre-warm complete in %.1fs", time.time() - t0)
+        except Exception:
+            logger.warning("Kokoro pre-warm failed; first real synthesize may be slow", exc_info=True)
+
+    threading.Thread(target=_warm, name="kokoro-prewarm", daemon=True).start()
+
+
 def _run_http(host: str = "0.0.0.0", port: int = 7860):
     """Start the HTTP API server with MCP streamable-HTTP mounted at /mcp."""
     import uvicorn
@@ -1743,7 +1817,17 @@ def _run_http(host: str = "0.0.0.0", port: int = 7860):
     from http_api import app
 
     install_mcp_route(app)
-    uvicorn.run(app, host=host, port=port, log_level="info")
+    inbound_pipeline: Any | None = None
+    try:
+        inbound_pipeline = _start_inbound_pipeline_if_enabled()
+        _prewarm_tts_if_enabled()
+        uvicorn.run(app, host=host, port=port, log_level="info")
+    finally:
+        if inbound_pipeline is not None:
+            try:
+                inbound_pipeline.stop()
+            except Exception:
+                logger.debug("inbound pipeline stop raised", exc_info=True)
 
 
 if __name__ == "__main__":

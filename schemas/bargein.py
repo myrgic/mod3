@@ -17,7 +17,7 @@ from typing import Literal
 
 from pipeline_state import InterruptInfo
 
-BargeinSource = Literal["browser_vad", "mcp_signal", "manual", "superwhisper"]
+BargeinSource = Literal["browser_vad", "mcp_signal", "manual", "superwhisper", "mic_vad"]
 
 
 @dataclass
