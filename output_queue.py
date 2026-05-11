@@ -112,6 +112,19 @@ class OutputQueueManager:
             queue._queue.clear()
         return cancelled
 
+    def drop_queue(self, channel_id: str) -> bool:
+        """Remove the ChannelQueue for a channel after its jobs are cancelled.
+
+        The drain thread (if any) terminates naturally on the next iteration
+        once its deque is empty and the running flag flips. Callers should
+        invoke ``cancel_channel`` first; this method then frees the
+        ChannelQueue reference so the channel name can be re-used without
+        accumulating stale queue state across reconnects. Returns True if a
+        queue existed and was removed.
+        """
+        with self._lock:
+            return self._queues.pop(channel_id, None) is not None
+
     def status(self) -> dict[str, Any]:
         """Snapshot of all channel queues."""
         return {

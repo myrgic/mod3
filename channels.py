@@ -537,15 +537,37 @@ class BrowserChannel:
     # ------------------------------------------------------------------
 
     def _cleanup(self) -> None:
-        """Deactivate channel and cancel pending TTS jobs on disconnect."""
+        """Deactivate channel, cancel queued TTS jobs, and detach from bus.
+
+        Fixes §3 of ARCHITECTURE.md: on browser page reload the old
+        WebSocket disconnects and a new one connects with a new channel_id.
+        Without full teardown, the bus retains:
+
+          * the ChannelDescriptor's ``deliver`` callback — a bound method
+            on this dead BrowserChannel that, if the drain thread fires
+            against it, writes to a closed WebSocket and triggers the
+            10s ``future.result(timeout=...)`` cascade in
+            ``_deliver_sync``;
+          * the per-channel ``ChannelQueue`` in the OutputQueueManager,
+            potentially with a drain thread mid-job for stale work;
+          * the channel's slot in ``_active_channels`` (used by the
+            trace-event broadcast fan-out).
+
+        We cancel queued jobs first, then unregister from the bus —
+        ``unregister_channel`` severs ``ch.deliver`` so any drain-thread
+        job already past the cancel point finds no callback to call when
+        it reaches the ``if ch and ch.deliver`` guard in ``bus.act``'s
+        ``_do_encode``.
+        """
+        if not self._active:
+            # Already cleaned up; idempotent.
+            return
         self._active = False
         BrowserChannel._active_channels.discard(self)
-        ch = self.bus._channels.get(self.channel_id)
-        if ch:
-            ch.active = False
         cancelled = self.bus._queue_manager.cancel_channel(self.channel_id)
+        self.bus.unregister_channel(self.channel_id)
         logger.info(
-            "BrowserChannel disconnected: %s (cancelled %d pending jobs)",
+            "BrowserChannel disconnected: %s (cancelled %d pending jobs, detached from bus)",
             self.channel_id,
             cancelled,
         )
