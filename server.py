@@ -5,9 +5,10 @@ Multi-model support: Voxtral, Kokoro, Chatterbox, Spark.
 Voice presets are resolved to the correct engine automatically.
 
 Interfaces:
-  MCP (default):  stdio-based MCP tools for Claude Code
-  HTTP (--http):  REST API for OpenClaw and external consumers
-  Both (--all):   MCP on stdio + HTTP on a port, shared model cache
+  HTTP (--http):  REST API + HTTP-MCP at /mcp (canonical transport)
+  HTTP (default): same as --http when invoked without flags (stdio deprecated)
+  stdio (--all, --channel, no-args): deprecated — see issue #11 and README
+
 
 Tools (MCP):
   speak(text, voice, speed, emotion) — non-blocking speech, returns job ID
