@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
 """Mod³ MCP shim — thin stdio proxy to a running Mod³ HTTP service.
 
+.. deprecated::
+    The stdio MCP transport (and this shim) are deprecated as of issue #11.
+    The canonical transport is HTTP-MCP: start the server with
+    ``python server.py --http`` and point your MCP client at
+    ``http://localhost:7860/mcp`` (streamable-HTTP transport).
+
+    The shim remains available for users who have not migrated. A
+    DeprecationWarning is printed to stderr at startup when this path is
+    active. Removal is tracked in https://github.com/myrgic/mod3/issues/11.
+
 Instead of spawning a full server.py (which loads TTS models, ~4GB VRAM),
 this shim implements the MCP stdio protocol and forwards tool calls to
 the Mod³ HTTP API at localhost:7860.
@@ -12,7 +22,7 @@ For `speak`, the shim posts to /v1/synthesize for audio generation, then
 plays the returned WAV bytes locally via sounddevice.
 
 Usage:
-    python mcp_shim.py              # normal MCP stdio mode
+    python mcp_shim.py              # deprecated stdio MCP mode (see above)
     python mcp_shim.py --test       # connectivity check, then exit
 """
 
@@ -1110,7 +1120,22 @@ METHOD_HANDLERS = {
 
 
 def run_stdio():
-    """Main MCP stdio loop."""
+    """Main MCP stdio loop.
+
+    .. deprecated::
+        stdio MCP transport is deprecated. Use HTTP-MCP instead:
+        start ``python server.py --http`` and connect via http://localhost:7860/mcp.
+        See https://github.com/myrgic/mod3/issues/11 for the removal plan.
+    """
+    import warnings
+    warnings.warn(
+        "stdio MCP transport is deprecated; prefer HTTP-MCP at /mcp "
+        "(start 'python server.py --http', then connect via "
+        "http://localhost:7860/mcp). This path will be removed in a future "
+        "release. See https://github.com/myrgic/mod3/issues/11",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
 
     while True:
