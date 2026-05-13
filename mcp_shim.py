@@ -1128,6 +1128,7 @@ def run_stdio():
         See https://github.com/myrgic/mod3/issues/11 for the removal plan.
     """
     import warnings
+
     warnings.warn(
         "stdio MCP transport is deprecated; prefer HTTP-MCP at /mcp "
         "(start 'python server.py --http', then connect via "
