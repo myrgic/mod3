@@ -144,153 +144,11 @@ class TestAcpSessionPrompt:
         assert "error" in resp
         assert resp["error"]["code"] == -32602
 
-    @patch("http_api.os.environ.get")
-    def test_session_prompt_returns_error_when_bridge_disabled(self, mock_env_get, client):
-        """When MOD3_USE_COGOS_AGENT is unset, session/prompt returns a structured
-        error rather than hanging. The error message tells the operator what
-        env var to set so they can recover.
+    def test_session_prompt_returns_error_when_no_seats(self, client):
+        """When no channel-client seats are attached, session/prompt returns
+        a structured error explaining how to connect the channel client.
         """
-        # Force is_enabled() to return False by clearing the env var.
-        mock_env_get.return_value = ""
-
-        with client.websocket_connect("/ws/acp") as ws:
-            ws.send_text(_req("initialize", {}, id=0))
-            ws.receive_text()
-            ws.send_text(_req("session/new", {}, id=1))
-            new_resp = _parse(ws.receive_text())
-            session_id = new_resp["result"]["sessionId"]
-
-            ws.send_text(
-                _req(
-                    "session/prompt",
-                    {
-                        "sessionId": session_id,
-                        "prompt": [{"type": "text", "text": "Hello?"}],
-                    },
-                    id=2,
-                )
-            )
-
-            resp = _parse(ws.receive_text())
-
-        assert resp.get("id") == 2
-        assert "error" in resp
-        assert resp["error"]["code"] == -32000
-        assert "MOD3_USE_COGOS_AGENT" in resp["error"]["message"]
-
-    def test_session_prompt_passes_through_to_kernel_cycle(self, client):
-        """When the kernel bridge is enabled and reachable, session/prompt:
-            1. registers an ACP listener
-            2. posts the user text to the kernel chat bus
-            3. waits for the response on the listener queue
-            4. emits a session/update agent_message_chunk with the response text
-            5. resolves the original session/prompt request with stopReason=end_turn
-
-        This mocks the bridge so no real kernel is required. The kernel-side
-        response is injected directly into the listener queue, simulating what
-        run_response_bridge does when a real kernel event arrives.
-        """
-        import asyncio
-
-        # Track the registered listener queue so we can inject the response.
-        captured_queue: dict[str, asyncio.Queue] = {}
-        real_register = None
-
-        # Capture-and-pass-through wrapper around register_acp_listener.
-        import cogos_agent_bridge as _bridge_mod
-
-        real_register = _bridge_mod.register_acp_listener
-
-        def _capture_register(session_id: str) -> asyncio.Queue:
-            q = real_register(session_id)
-            captured_queue[session_id] = q
-            return q
-
-        # post_user_message mock: succeeds, then schedules the kernel "response"
-        # arrival on the listener queue. We use asyncio.create_task so it runs
-        # concurrently with the awaiting _stream_prompt.
-        async def _fake_post(text: str, session_id: str) -> bool:
-            # Schedule the response delivery on the next event-loop tick.
-            async def _deliver():
-                # Tiny sleep so the handler is actually waiting on the queue.
-                await asyncio.sleep(0.01)
-                q = captured_queue.get(session_id)
-                if q is not None:
-                    from bus_bridge import BusEnvelope
-
-                    env = BusEnvelope(
-                        raw={},
-                        kind="agent_response",
-                        payload={"text": "kernel says hello"},
-                        event_id="evt-1",
-                        ts=None,
-                    )
-                    await q.put(("kernel says hello", env))
-
-            asyncio.create_task(_deliver())
-            return True
-
-        with (
-            patch("cogos_agent_bridge.is_enabled", return_value=True),
-            patch("cogos_agent_bridge.register_acp_listener", side_effect=_capture_register),
-            patch("cogos_agent_bridge.post_user_message", side_effect=_fake_post),
-        ):
-            with client.websocket_connect("/ws/acp") as ws:
-                ws.send_text(_req("initialize", {}, id=0))
-                ws.receive_text()
-                ws.send_text(_req("session/new", {}, id=1))
-                new_resp = _parse(ws.receive_text())
-                session_id = new_resp["result"]["sessionId"]
-
-                ws.send_text(
-                    _req(
-                        "session/prompt",
-                        {
-                            "sessionId": session_id,
-                            "prompt": [{"type": "text", "text": "Hello?"}],
-                        },
-                        id=2,
-                    )
-                )
-
-                messages = []
-                for _ in range(10):
-                    raw = ws.receive_text()
-                    parsed = _parse(raw)
-                    messages.append(parsed)
-                    if parsed.get("id") == 2:
-                        break
-
-        # Check: at least one session/update notification with the kernel text.
-        updates = [
-            m
-            for m in messages
-            if m.get("method") == "session/update" and m.get("params", {}).get("sessionUpdate") == "agent_message_chunk"
-        ]
-        assert updates, f"No agent_message_chunk update; got: {messages}"
-        chunk = updates[0]["params"]["content"]
-        assert chunk.get("type") == "text"
-        assert chunk.get("text") == "kernel says hello"
-
-        # And: the final session/prompt response resolves with end_turn.
-        prompt_responses = [m for m in messages if m.get("id") == 2]
-        assert prompt_responses, f"No response for session/prompt; got: {messages}"
-        final = prompt_responses[0]
-        assert "result" in final
-        assert final["result"]["stopReason"] == "end_turn"
-
-    def test_session_prompt_returns_error_when_kernel_unreachable(self, client):
-        """When post_user_message returns False (kernel POST failed), session/prompt
-        returns a structured error rather than hanging on the listener queue.
-        """
-
-        async def _fake_post_fail(text: str, session_id: str) -> bool:
-            return False
-
-        with (
-            patch("cogos_agent_bridge.is_enabled", return_value=True),
-            patch("cogos_agent_bridge.post_user_message", side_effect=_fake_post_fail),
-        ):
+        with patch("seats.SeatRegistry.fan_out", return_value=0):
             with client.websocket_connect("/ws/acp") as ws:
                 ws.send_text(_req("initialize", {}, id=0))
                 ws.receive_text()
@@ -314,7 +172,46 @@ class TestAcpSessionPrompt:
         assert resp.get("id") == 2
         assert "error" in resp
         assert resp["error"]["code"] == -32000
-        assert "Kernel unreachable" in resp["error"]["message"]
+        assert "channel-client" in resp["error"]["message"].lower()
+
+    def test_session_prompt_fans_to_seats_and_resolves(self, client):
+        """When seats are attached, session/prompt fans the message and resolves
+        immediately with end_turn (responses flow via the channel client tools).
+        """
+        fanned: list[dict] = []
+
+        def _fake_fan_out(session_id: str, payload: dict) -> int:
+            fanned.append({"session_id": session_id, "payload": payload})
+            return 1  # one seat notified
+
+        with patch("seats.SeatRegistry.fan_out", side_effect=_fake_fan_out):
+            with client.websocket_connect("/ws/acp") as ws:
+                ws.send_text(_req("initialize", {}, id=0))
+                ws.receive_text()
+                ws.send_text(_req("session/new", {}, id=1))
+                new_resp = _parse(ws.receive_text())
+                session_id = new_resp["result"]["sessionId"]
+
+                ws.send_text(
+                    _req(
+                        "session/prompt",
+                        {
+                            "sessionId": session_id,
+                            "prompt": [{"type": "text", "text": "Hello from ACP"}],
+                        },
+                        id=2,
+                    )
+                )
+
+                resp = _parse(ws.receive_text())
+
+        assert resp.get("id") == 2
+        assert "result" in resp
+        assert resp["result"]["stopReason"] == "end_turn"
+        # Verify the fan-out carried the right content
+        assert len(fanned) == 1
+        assert fanned[0]["payload"]["content"] == "Hello from ACP"
+        assert fanned[0]["payload"]["type"] == "user_message"
 
 
 # ---------------------------------------------------------------------------
