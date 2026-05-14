@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -57,6 +58,39 @@ from schemas.ws_chat import (
 )
 
 logger = logging.getLogger("mod3.channels")
+
+# ---------------------------------------------------------------------------
+# Channel-mode helpers
+# ---------------------------------------------------------------------------
+
+def _is_channel_mode() -> bool:
+    """Return True when mod3 is acting as a Claude Code Channel.
+
+    Checked by reading the channel_mode key from
+    ``~/.claude/channels/mod3/config.json``.  Falls back to the
+    ``MOD3_CHANNEL_MODE`` environment variable (set to "claude-code" to
+    enable) so the flag can be toggled without a config file.
+
+    The default is False (standalone/local-agent mode) so existing behaviour
+    is unchanged when the config is absent.
+    """
+    # Env var wins over config file for easy scripting.
+    env_val = os.environ.get("MOD3_CHANNEL_MODE", "").strip().lower()
+    if env_val == "claude-code":
+        return True
+    if env_val in ("local-agent", "0", "false", "off"):
+        return False
+
+    config_path = os.path.join(
+        os.path.expanduser("~"), ".claude", "channels", "mod3", "config.json"
+    )
+    try:
+        with open(config_path) as f:
+            cfg = json.load(f)
+        return cfg.get("channel_mode", "local-agent") == "claude-code"
+    except (OSError, json.JSONDecodeError, KeyError):
+        return False
+
 
 # Module-level TypeAdapter for the InboundFrame discriminated union.
 # Built once at import time; used in BrowserChannel._handle_json for
@@ -111,12 +145,16 @@ class BrowserChannel:
         pipeline_state: PipelineState,
         loop: asyncio.AbstractEventLoop,
         on_event: Callable[[CognitiveEvent], Awaitable[None]] | None = None,
+        client_host: str | None = None,
     ):
         self.ws = ws
         self.bus = bus
         self.pipeline_state = pipeline_state
         self._loop = loop
         self._on_event = on_event
+        # Actual peername from the socket — used for localhost auto-allow.
+        # Caller should pass websocket.client.host; headers are NOT trusted.
+        self._client_host: str = client_host or ""
         self.channel_id = f"browser:{uuid.uuid4().hex[:8]}"
         self.config: dict[str, Any] = {
             "voice": "bm_lewis",
@@ -466,15 +504,46 @@ class BrowserChannel:
                 await self._on_event(event)
 
     async def _process_text(self, text: str) -> None:
-        """Text message → CognitiveEvent → agent loop."""
+        """Text message → CognitiveEvent → agent loop (local) or channel notification (claude-code).
+
+        When channel_mode is "claude-code" (set via ~/.claude/channels/mod3/config.json
+        or MOD3_CHANNEL_MODE=claude-code env var), emits a notifications/claude/channel
+        event so Claude Code receives the message as a <channel source="mod3" ...> tag
+        instead of routing it to the local AgentLoop.  The TranscriptFrame echo back to
+        the browser is sent in both modes so the UI always shows the echoed input.
+
+        Access gating (via access.py) runs before this method is reached — see _handle_json.
+        """
+        # Echo transcript to browser in all modes
+        frame = TranscriptFrame(type="transcript", text=text, source="text")
+        await self.ws.send_json(frame.model_dump(exclude_none=True))
+
+        if _is_channel_mode():
+            # Channel mode: forward to Claude Code as a channel notification
+            try:
+                from server import emit_channel_event  # noqa: PLC0415 — avoids circular import at module level
+
+                await emit_channel_event(
+                    content=text,
+                    meta={
+                        "session_id": self.channel_id,
+                        "input_type": "text",
+                    },
+                )
+                logger.debug("channel notification emitted: session_id=%s text=%r", self.channel_id, text[:80])
+            except RuntimeError as exc:
+                logger.warning("channel notification failed (MCP session inactive?): %s", exc)
+            except Exception:
+                logger.exception("unexpected error emitting channel notification for text input")
+            return
+
+        # Local-agent mode: route to AgentLoop as before
         event = CognitiveEvent(
             modality=ModalityType.TEXT,
             content=text,
             source_channel=self.channel_id,
             confidence=1.0,
         )
-        frame = TranscriptFrame(type="transcript", text=text, source="text")
-        await self.ws.send_json(frame.model_dump(exclude_none=True))
         if self._on_event:
             await self._on_event(event)
 

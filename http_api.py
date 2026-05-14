@@ -1290,12 +1290,15 @@ async def ws_chat(websocket: WebSocket):
         pipeline_state=ps,
     )
 
+    # Pass actual peername (not headers) for localhost auto-allow in access gating.
+    client_host = websocket.client.host if websocket.client else ""
     channel = BrowserChannel(
         ws=websocket,
         bus=_bus,
         pipeline_state=ps,
         loop=loop,
         on_event=agent.handle_event,
+        client_host=client_host,
     )
 
     agent.channel_id = channel.channel_id
