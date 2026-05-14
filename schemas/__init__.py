@@ -1,6 +1,6 @@
 """Mod3 shared schemas.
 
-Three layers live here:
+Four layers live here:
 
 * :mod:`.wire` and :mod:`.operations` — the D2 wire protocol shared with
   the CogOS kernel (Go). These are the canonical contract; field names
@@ -11,6 +11,9 @@ Three layers live here:
 * :mod:`.primitives` — Python-side dual of what the inference engines
   emit (``AudioChunk``, ``TranscriptResult`` …). These are not on the
   wire by themselves; they round-trip through the operation schemas.
+* :mod:`.http` — Pydantic models for every REST endpoint in ``http_api.py``.
+* :mod:`.ws_chat` — Pydantic frame models for the ``/ws/chat`` WebSocket.
+* :mod:`.ws_audio` — Pydantic frame models for ``/ws/audio/{session_id}``.
 
 The legacy in-process dataclasses in :mod:`mod3.modality` are retained
 for existing call sites and will be progressively migrated.
