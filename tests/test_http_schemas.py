@@ -249,6 +249,20 @@ class TestHealthResponse:
         r = HealthResponse(status="error", service="mod3", version="0.4.0", error="boom")
         assert r.error == "boom"
 
+    def test_cogos_agent_enabled_default_false(self):
+        r = HealthResponse(status="ok", service="mod3", version="0.4.0")
+        assert r.cogos_agent_enabled is False
+
+    def test_cogos_agent_enabled_true(self):
+        r = HealthResponse(
+            status="ok",
+            service="mod3",
+            version="0.4.0",
+            cogos_agent_enabled=True,
+        )
+        d = r.model_dump()
+        assert d["cogos_agent_enabled"] is True
+
 
 class TestShutdownRequest:
     def test_defaults(self):
