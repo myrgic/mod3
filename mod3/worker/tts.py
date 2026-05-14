@@ -13,7 +13,6 @@ one ``WireMessage`` per ``AudioChunk`` the engine produces without buffering.
 from __future__ import annotations
 
 import base64
-import sys
 from collections.abc import Iterator
 
 import numpy as np

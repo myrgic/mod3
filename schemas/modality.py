@@ -19,7 +19,6 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-
 # ---------------------------------------------------------------------------
 # Enums — must stay aligned with pkg/modality/types.go
 # ---------------------------------------------------------------------------

@@ -6,7 +6,6 @@ Mocks engine.generate_audio so no MLX models are loaded.
 
 from __future__ import annotations
 
-import sys
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -56,7 +55,6 @@ def _make_fake_engine(num_chunks: int = 2):
 
 from integrations.pipecat.tts_service import Mod3TTSService, _float32_to_int16_bytes  # noqa: E402
 
-
 # ---------------------------------------------------------------------------
 # Unit tests
 # ---------------------------------------------------------------------------
@@ -85,7 +83,7 @@ def test_mod3_tts_service_instantiates():
 @pytest.mark.asyncio
 async def test_run_tts_yields_frames():
     """run_tts should yield TTSStartedFrame, at least one audio frame, then TTSStoppedFrame."""
-    from pipecat.frames.frames import TTSAudioRawFrame, TTSStartedFrame, TTSStoppedFrame
+    from pipecat.frames.frames import TTSAudioRawFrame
 
     service = Mod3TTSService(voice="bm_lewis")
 

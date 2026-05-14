@@ -14,13 +14,13 @@ import json
 import pytest
 
 from schemas import (
+    MAX_WIRE_LINE_SIZE,
     AudioChunk,
     ChannelDescriptor,
     CognitiveEvent,
     CognitiveIntent,
     EncodedOutput,
     GateResult,
-    MAX_WIRE_LINE_SIZE,
     ModalityType,
     ModuleState,
     ModuleStatus,
@@ -29,17 +29,15 @@ from schemas import (
     STTStreamingResponse,
     STTTranscribeRequest,
     STTTranscribeResponse,
+    TranscriptResult,
     TTSChunkEvent,
-    TTSStreamRequest,
     TTSSynthesizeRequest,
     TTSSynthesizeResponse,
-    TranscriptResult,
     VADDetectRequest,
     VADDetectResponse,
     VADResult,
     WireMessage,
 )
-
 
 # ---------------------------------------------------------------------------
 # Wire envelope
@@ -233,13 +231,15 @@ class TestOperationSchemas:
         assert resp.has_speech is True
 
     def test_stt_transcribe_round_trip(self):
-        req = STTTranscribeRequest(audio_b64="AAAA", sample_rate=16000, language="en")
+        # Construct (validates the schema); resp carries the actual assertions.
+        STTTranscribeRequest(audio_b64="AAAA", sample_rate=16000, language="en")
         resp = STTTranscribeResponse(transcript="hello world", confidence=0.92, stt_ms=120.0)
         assert resp.transcript == "hello world"
 
     def test_stt_streaming_tiers(self):
         for tier in ("t1", "t2"):
-            req = STTStreamingRequest(audio_b64="AAAA", tier=tier)
+            # Construct (validates the schema); resp carries the actual assertions.
+            STTStreamingRequest(audio_b64="AAAA", tier=tier)
             resp = STTStreamingResponse(
                 confirmed="hello",
                 tentative="wor",

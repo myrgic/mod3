@@ -14,8 +14,6 @@ pair here, (b) handling it in the matching ``mod3/worker/*.py`` module,
 
 from __future__ import annotations
 
-from typing import Any
-
 from pydantic import BaseModel, ConfigDict, Field
 
 # ---------------------------------------------------------------------------

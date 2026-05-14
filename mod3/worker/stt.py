@@ -70,7 +70,6 @@ def _decode_audio_b64(audio_b64: str, sample_rate: int) -> np.ndarray:
 
         if os.environ.get("MOD3_WORKER_MOCK") == "1":
             # Simple ratio resample for tests — avoids torch dependency
-            import math
 
             new_len = int(len(audio_f32) * 16000 / sample_rate)
             indices = np.linspace(0, len(audio_f32) - 1, new_len)
@@ -102,6 +101,7 @@ def _handle_transcribe(request_id: str, data: dict) -> WireMessage:
         stt_ms = 1.0
     else:
         import mlx_whisper
+
         from vad import is_hallucination
 
         decoder = _get_decoder()
