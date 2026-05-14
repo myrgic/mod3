@@ -52,6 +52,7 @@ class TestDashboardChatWs:
                 ready.set()
                 # Wait for one message with a 3s timeout
                 import queue as _q
+
                 msg_q = _q.Queue()
                 import threading as _t
 
@@ -142,6 +143,7 @@ class TestMod3DashboardPostTool:
                 ready.set()
                 import queue as _q
                 import threading as _t
+
                 msg_q = _q.Queue()
 
                 def _recv():
