@@ -1164,11 +1164,11 @@ async def dashboard_chat_post(request: Request):
 
     # Fan to WebSocket dashboard-chat subscribers (existing server.py mechanism)
     try:
-        from server import _broadcast_dashboard_chat
+        from server import _dashboard_chat_broadcast
 
-        _broadcast_dashboard_chat({"type": "chat", "role": role, "text": text, "session_id": session_id})
+        _dashboard_chat_broadcast({"type": "chat", "role": role, "text": text, "session_id": session_id})
     except (ImportError, AttributeError):
-        logger.debug("_broadcast_dashboard_chat not available (server.py not loaded or renamed)")
+        logger.debug("_dashboard_chat_broadcast not available (server.py not loaded or renamed)")
 
     # Also fan to any seat SSE streams in the session
     if session_id:
