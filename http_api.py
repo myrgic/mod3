@@ -1527,6 +1527,72 @@ async def ws_acp(websocket: WebSocket):
         _logger.info("ACP session closed")
 
 
+# ---------------------------------------------------------------------------
+# Dashboard chat WebSocket — symmetric outbound channel (Path B)
+# ---------------------------------------------------------------------------
+
+
+@app.websocket("/ws/dashboard-chat")
+async def ws_dashboard_chat(websocket: WebSocket):
+    """Symmetric dashboard chat channel — broadcasts mod3_dashboard_post messages.
+
+    Any number of dashboard tabs can connect here. When Claude Code calls the
+    mod3_dashboard_post MCP tool, the message is fanned out to every connected
+    subscriber as a JSON text frame:
+
+      {"type": "chat", "role": "assistant", "text": "...", "session_id": "..."}
+
+    User-role messages (role="user") are also supported for future bidirectional
+    wiring; the chat panel renders both sides with distinct styling.
+
+    Client → server frames are not processed in v0. The connection stays open
+    until the client disconnects; no heartbeat is required.
+    """
+    from server import (
+        _dashboard_chat_register,
+        _dashboard_chat_unregister,
+    )
+
+    await websocket.accept()
+    loop = asyncio.get_running_loop()
+    q: asyncio.Queue = asyncio.Queue()
+    _dashboard_chat_register(q, loop)
+    _logger.info("dashboard-chat subscriber connected")
+
+    import json as _json
+
+    async def _drain_client():
+        """Drain incoming client frames; set disconnect flag on close."""
+        try:
+            while True:
+                msg = await websocket.receive()
+                if msg.get("type") == "websocket.disconnect":
+                    # Signal the send loop to exit by enqueuing a sentinel.
+                    await q.put(None)
+                    return
+        except Exception:  # noqa: BLE001
+            await q.put(None)
+
+    drain_task = asyncio.ensure_future(_drain_client())
+    try:
+        while True:
+            message = await q.get()
+            if message is None:
+                # Sentinel — client disconnected.
+                break
+            await websocket.send_text(_json.dumps(message, separators=(",", ":")))
+    except Exception as exc:  # noqa: BLE001 — disconnect is the normal exit
+        _logger.debug("/ws/dashboard-chat send error: %s", exc)
+    finally:
+        drain_task.cancel()
+        try:
+            await drain_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        _dashboard_chat_unregister(q)
+        _logger.info("dashboard-chat subscriber disconnected")
+
+
 # Mount dashboard static files (after explicit routes so they don't shadow /v1/*)
 if _dashboard_dir.exists():
     # VAD assets need their own mount (ONNX workers request from this path)
