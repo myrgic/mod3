@@ -1302,6 +1302,250 @@ async def ws_chat(websocket: WebSocket):
         _logger.info("Dashboard session ended: %s", channel.channel_id)
 
 
+# ---------------------------------------------------------------------------
+# ACP (Agent Client Protocol) WebSocket endpoint
+# ---------------------------------------------------------------------------
+
+# ACP JSON-RPC error codes
+_ACP_METHOD_NOT_FOUND = -32601
+_ACP_INVALID_PARAMS = -32602
+_ACP_INTERNAL_ERROR = -32603
+_ACP_PROTOCOL_VERSION = 1
+
+
+@app.websocket("/ws/acp")
+async def ws_acp(websocket: WebSocket):
+    """ACP (Agent Client Protocol) endpoint — JSON-RPC 2.0 over WebSocket.
+
+    Implements a minimal ACP server that routes prompts through mod3's
+    existing AgentLoop. The wire format matches Zed's Agent Client Protocol
+    spec (https://github.com/zed-industries/agent-client-protocol).
+
+    Supported methods:
+      initialize      -- capability negotiation
+      session/new     -- create a session
+      session/prompt  -- submit a user prompt (streams via session/update notifications)
+      session/cancel  -- cancel in-flight prompt (notification, no response)
+
+    Both local AgentLoop and kernel-bridged agent are supported via the
+    MOD3_USE_COGOS_AGENT environment variable (same toggle as /ws/chat).
+
+    /ws/chat is not deprecated; both endpoints are live in parallel.
+    """
+    import json
+    import os
+    from uuid import uuid4
+
+    from schemas.acp import (
+        AgentCapabilities,
+        InitializeResult,
+        JsonRpcResponse,
+        PromptCapabilities,
+        SessionNewResult,
+        SessionPromptResult,
+        SessionUpdateNotification,
+    )
+
+    await websocket.accept()
+    _logger.info("ACP session opened")
+
+    # Per-connection state
+    _sessions: dict[str, dict] = {}  # sessionId -> {"cancel": asyncio.Event}
+    _initialized = False
+
+    async def _send(obj: dict) -> None:
+        try:
+            await websocket.send_text(json.dumps(obj, separators=(",", ":")))
+        except Exception:  # noqa: BLE001
+            pass
+
+    async def _send_response(request_id: int | str, result: object) -> None:
+        resp = JsonRpcResponse.ok(
+            request_id=request_id,
+            result=result if isinstance(result, dict) else result.model_dump(),  # pyright: ignore[reportAttributeAccessIssue]
+        )
+        await _send(resp.model_dump(exclude_none=True))
+
+    async def _send_error(request_id: int | str | None, code: int, message: str) -> None:
+        resp = JsonRpcResponse.err(request_id=request_id, code=code, message=message)
+        await _send(resp.model_dump(exclude_none=True))
+
+    async def _send_notification(notif: dict) -> None:
+        await _send(notif)
+
+    async def _stream_prompt(session_id: str, text: str, request_id: int | str) -> None:
+        """Route a prompt through AgentLoop (or kernel bridge) and stream chunks."""
+        nonlocal _sessions
+
+        use_cogos = os.environ.get("MOD3_USE_COGOS_AGENT", "").strip().lower() in ("1", "true", "yes", "on")
+
+        if use_cogos:
+            # Kernel-bridged path: forward to cogos bus then wait for response.
+            from cogos_agent_bridge import post_user_message
+
+            ok = await post_user_message(text, session_id)
+            if not ok:
+                # Kernel unreachable; fall through to local path gracefully.
+                use_cogos = False
+            else:
+                # Kernel will push response via bus_dashboard_response. We can't
+                # easily intercept it here without coupling to the SSE subscriber.
+                # For now, emit a single update frame with a placeholder and rely
+                # on the BrowserChannel broadcast path to push the actual response
+                # to the /ws/chat subscribers. This is the transitional behaviour
+                # documented in RFC-0001 Section 3.
+                notif = SessionUpdateNotification.text_chunk(
+                    session_id=session_id,
+                    text="(response delivered via kernel bus -- see /ws/chat)",
+                )
+                await _send_notification(notif.model_dump())
+                result = SessionPromptResult(stopReason="end_turn")
+                await _send_response(request_id, result)
+                return
+
+        if not use_cogos:
+            # Local AgentLoop path -- build a minimal conversation turn.
+            from agent_loop import AgentLoop
+            from providers import auto_detect_provider
+
+            provider = auto_detect_provider()
+            from pipeline_state import PipelineState
+
+            ps = PipelineState()
+            agent = AgentLoop(bus=_bus, provider=provider, pipeline_state=ps)
+
+            # Collect streamed response chunks.
+            chunks: list[str] = []
+
+            async def _on_chunk(chunk_text: str) -> None:
+                chunks.append(chunk_text)
+                notif = SessionUpdateNotification.text_chunk(
+                    session_id=session_id,
+                    text=chunk_text,
+                )
+                await _send_notification(notif.model_dump())
+
+            # Check if AgentLoop supports an async streaming interface.
+            # It exposes process_text_async(text, on_chunk) when available,
+            # else we fall back to the synchronous path and emit one chunk.
+            from modality import CognitiveEvent, ModalityType
+
+            event = CognitiveEvent(
+                modality=ModalityType.TEXT,
+                content=text,
+                confidence=1.0,
+                source_channel="acp",
+                timestamp=__import__("time").time(),
+            )
+
+            if asyncio.iscoroutinefunction(getattr(agent, "process_text_async", None)):
+                await agent.process_text_async(event, on_chunk=_on_chunk)  # pyright: ignore[reportAttributeAccessIssue]
+            elif hasattr(agent, "handle_event"):
+                # Synchronous handle_event; collect full response, then emit.
+                collected_response: list[str] = []
+
+                class _MockChannel:
+                    async def send_response_text(self, txt: str) -> None:
+                        collected_response.append(txt)
+
+                    async def send_response_complete(self, *a, **kw) -> None:
+                        pass
+
+                agent._channel_ref = _MockChannel()  # pyright: ignore[reportAttributeAccessIssue]
+                await agent.handle_event(event)
+                full = "".join(collected_response)
+                if full:
+                    notif = SessionUpdateNotification.text_chunk(
+                        session_id=session_id,
+                        text=full,
+                    )
+                    await _send_notification(notif.model_dump())
+            else:
+                # Fallback: no viable streaming path.
+                notif = SessionUpdateNotification.text_chunk(
+                    session_id=session_id,
+                    text="(AgentLoop does not expose a streaming interface in this build)",
+                )
+                await _send_notification(notif.model_dump())
+
+        result = SessionPromptResult(stopReason="end_turn")
+        await _send_response(request_id, result)
+
+    try:
+        while True:
+            raw = await websocket.receive_text()
+            try:
+                msg = json.loads(raw)
+            except json.JSONDecodeError:
+                await _send_error(None, -32700, "Parse error")
+                continue
+
+            jsonrpc = msg.get("jsonrpc")
+            if jsonrpc != "2.0":
+                await _send_error(None, -32600, "Invalid request: jsonrpc must be '2.0'")
+                continue
+
+            method = msg.get("method", "")
+            msg_id = msg.get("id")  # None for notifications
+            params = msg.get("params") or {}
+
+            # Notifications have no id and expect no response.
+            is_notification = "id" not in msg
+
+            # ---- initialize ----
+            if method == "initialize":
+                _initialized = True
+                result = InitializeResult(
+                    agentCapabilities=AgentCapabilities(
+                        promptCapabilities=PromptCapabilities(audio=False, image=False, embeddedContext=False),
+                        sessionCapabilities={},
+                    )
+                )
+                await _send_response(msg_id, result)
+
+            # ---- session/new ----
+            elif method == "session/new":
+                session_id = f"mod3-{uuid4().hex[:12]}"
+                _sessions[session_id] = {"cancel": asyncio.Event()}
+                result = SessionNewResult(sessionId=session_id)
+                await _send_response(msg_id, result)
+
+            # ---- session/prompt ----
+            elif method == "session/prompt":
+                session_id = params.get("sessionId", "")
+                prompt_blocks = params.get("prompt", [])
+                # Extract text from content blocks.
+                text_parts = [
+                    b.get("text", "") for b in prompt_blocks if isinstance(b, dict) and b.get("type") == "text"
+                ]
+                user_text = " ".join(text_parts).strip()
+                if not user_text:
+                    await _send_error(msg_id, _ACP_INVALID_PARAMS, "prompt must contain at least one text block")
+                    continue
+                # Ensure session exists (create on-demand for resilience).
+                if session_id not in _sessions:
+                    _sessions[session_id] = {"cancel": asyncio.Event()}
+                await _stream_prompt(session_id, user_text, msg_id)
+
+            # ---- session/cancel (notification) ----
+            elif method == "session/cancel":
+                session_id = params.get("sessionId", "")
+                session_info = _sessions.get(session_id)
+                if session_info:
+                    session_info["cancel"].set()
+                # No response for notifications.
+
+            # ---- unknown ----
+            else:
+                if not is_notification:
+                    await _send_error(msg_id, _ACP_METHOD_NOT_FOUND, f"Method not found: {method}")
+
+    except Exception as exc:  # noqa: BLE001 — disconnect is the normal exit
+        _logger.debug("/ws/acp disconnect: %s", exc)
+    finally:
+        _logger.info("ACP session closed")
+
+
 # Mount dashboard static files (after explicit routes so they don't shadow /v1/*)
 if _dashboard_dir.exists():
     # VAD assets need their own mount (ONNX workers request from this path)

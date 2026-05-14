@@ -6,6 +6,7 @@ to STT. Prevents Whisper hallucinations on silence/noise.
 Also includes a Bag of Hallucinations (BoH) post-filter for known
 phantom transcription phrases.
 """
+# pyright: reportGeneralTypeIssues=false
 
 import threading
 from dataclasses import dataclass

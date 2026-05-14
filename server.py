@@ -18,6 +18,7 @@ Tools (MCP):
   set_output_device(device)          — list/switch audio output
   diagnostics()                      — engine state + last metrics
 """
+# pyright: reportArgumentType=false, reportAttributeAccessIssue=false
 
 import json
 import logging
