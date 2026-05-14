@@ -212,9 +212,7 @@ class TestDashboardChatEchoSuppression:
         sender_events = _drain(sender)
         observer_events = _drain(observer)
 
-        assert len(sender_events) == 0, (
-            f"Sender received its own broadcast back — echo loop bug: {sender_events}"
-        )
+        assert len(sender_events) == 0, f"Sender received its own broadcast back — echo loop bug: {sender_events}"
         assert len(observer_events) == 1, f"Observer should receive the message: {observer_events}"
         assert observer_events[0]["type"] == "assistant_message"
         assert observer_events[0]["content"] == "hello from assistant"
