@@ -487,7 +487,7 @@ from bargein import BargeinRegistry, make_file_mirror_subscriber  # noqa: E402
 
 _bargein_registry = BargeinRegistry(pipeline_state)
 # Mirror in-process provider events into the legacy signal file so
-# out-of-process consumers (mcp_shim.py, integrations watching the file)
+# out-of-process consumers (integrations watching the file)
 # keep receiving events from in-process providers like SuperWhisperProvider.
 _bargein_registry.subscribe(make_file_mirror_subscriber(_BARGEIN_SIGNAL))
 _bargein_registry.start_from_env()

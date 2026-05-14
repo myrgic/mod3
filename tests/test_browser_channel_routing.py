@@ -1,13 +1,12 @@
 """Tests for BrowserChannel.broadcast_response_text session routing.
 
-Covers Codex review #4 / Fix 4: kernel replies that include a session_id
-should be delivered ONLY to the matching BrowserChannel; replies without a
-session_id should fall back to broadcast (preserves backward compatibility
-with older kernels that don't yet include the session field).
+broadcast_response_text and broadcast_response_complete support optional
+session_id routing: when a ``mod3:<channel_id>`` prefix is present, the
+frame is delivered only to the matching BrowserChannel; without one, all
+active channels receive the frame (broadcast fallback).
 
-The session_id format is the convention from cogos_agent_bridge.post_user_message:
-``mod3:<channel_id>``. The leading ``mod3:`` is stripped to match the
-``BrowserChannel.channel_id`` value (e.g. ``browser:abc12345``).
+The ``mod3:`` prefix is stripped to match ``BrowserChannel.channel_id``
+(e.g. ``browser:abc12345``).
 
 We don't spin up a real WebSocket; instead we register lightweight stand-ins
 on ``BrowserChannel._active_channels`` (a class-level set) that record the
@@ -181,12 +180,11 @@ def test_broadcast_session_id_with_no_match_drops_silently():
 
 
 # ---------------------------------------------------------------------------
-# response_complete routing (kernel-path turn-done signal)
+# response_complete routing
 #
-# Paired with broadcast_response_text in cogos_agent_bridge.run_response_bridge;
-# must follow the same session-scoped routing so the complete-frame lands on
-# the originating dashboard channel (otherwise multi-client setups see
-# cross-talk or hang on a non-matching spinner).
+# Paired with broadcast_response_text; must follow the same session-scoped
+# routing so the complete-frame lands on the originating dashboard channel
+# (otherwise multi-client setups see cross-talk or a hanging spinner).
 # ---------------------------------------------------------------------------
 
 

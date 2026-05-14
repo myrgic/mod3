@@ -25,9 +25,7 @@ Each Claude Code session spawns its own `clients/channel_client.py` child proces
 That child registers a seat in the mod3 session, subscribes to the seat's SSE event
 stream, and forwards events to Claude Code as `notifications/claude/channel`.
 
-This is structurally different from the old `server.py --channel` mode (removed in
-this PR — see issue #11 and PR #39 supersession). The daemon stays HTTP-only; the
-stdio interface lives entirely in the channel client.
+The daemon is HTTP-only. The stdio interface lives entirely in the channel client.
 
 ## Starting as a Claude Code Channel (development)
 
@@ -44,28 +42,9 @@ claude --channels plugin:mod3@myrgic-plugins
 The `mcp.channel.json` file at the repo root configures the channel client entrypoint.
 Claude Code spawns `python3 clients/channel_client.py` as the child process.
 
-## Two modes of operation
-
-| Mode | How to start | What happens |
-|------|-------------|--------------|
-| **Standalone** (default) | `python3 server.py --http` | Dashboard text routes to the local AgentLoop |
-| **Claude Code Channel** | `claude --dangerously-load-development-channels server:mod3` | Dashboard text arrives in Claude Code as `<channel>` tags via the channel client |
-
-## Enabling channel mode in the dashboard
-
-Configure via the `/mod3:configure` skill inside your Claude Code session, or manually:
-
-```bash
-mkdir -p ~/.claude/channels/mod3
-cat > ~/.claude/channels/mod3/config.json <<'EOF'
-{
-  "channel_mode": "claude-code",
-  "server_url": "http://localhost:7860",
-  "voice": "bm_lewis",
-  "speed": 1.25
-}
-EOF
-```
+`claude --dangerously-load-development-channels server:mod3` is the canonical
+development invocation. The mod3 daemon supports the channel-client subprocess
+attachment as its primary operational mode.
 
 ## Message flow
 
@@ -142,7 +121,7 @@ Access is governed by `~/.claude/channels/mod3/access.json` via `access.py`.
 
 See the `/mod3:access` skill for full subcommand reference.
 
-## New HTTP endpoints (added alongside this channel implementation)
+## HTTP endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -157,16 +136,5 @@ See the `/mod3:access` skill for full subcommand reference.
 
 | Skill | Purpose |
 |-------|---------|
-| `/mod3:configure` | Set channel mode, server URL, voice defaults |
+| `/mod3:configure` | Set server URL, voice defaults |
 | `/mod3:access` | Manage access.json: pair, policy, allow, list |
-
-## What changed from PR #39
-
-PR #39 added `--channel` mode to `server.py`, conflating service and client in the
-daemon process. That approach was structurally incorrect (see issue #11 — stdio
-deprecation was intentional). This implementation supersedes PR #39 with:
-
-- `clients/channel_client.py` — separate stdio MCP process (correct shape)
-- `seats.py` — in-memory seat registry for the HTTP daemon
-- `access.py` — transport-agnostic access control (ported from PR #39 as-is)
-- `server.py` — cleaned up: no `--channel` mode, no monkey-patch, HTTP-only
