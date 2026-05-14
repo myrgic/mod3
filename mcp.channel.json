@@ -4,5 +4,22 @@
       "command": "python3",
       "args": ["server.py", "--channel"]
     }
+  },
+  "_toolManifest": {
+    "note": "Tool manifest for documentation; actual tool registration is in server.py FastMCP instance.",
+    "tools": [
+      {"name": "speak", "description": "Synthesize text to speech and play it through the user's speakers."},
+      {"name": "speech_status", "description": "Check status of a speech job, or get the most recent result."},
+      {"name": "stop", "description": "Stop current speech or cancel a specific queued item."},
+      {"name": "list_voices", "description": "List all available voice presets grouped by engine."},
+      {"name": "set_output_device", "description": "List audio output devices, or set the active one."},
+      {"name": "diagnostics", "description": "Return engine state and last generation metrics for debugging."},
+      {"name": "vad_check", "description": "Check if an audio file contains speech using Silero VAD."},
+      {"name": "await_voice_input", "description": "Block until the user finishes a SuperWhisper recording, then return the transcript."},
+      {"name": "register_session", "description": "Register a session with the Mod3 communication bus (ADR-082)."},
+      {"name": "deregister_session", "description": "Release a session's voice and drop its pending jobs."},
+      {"name": "list_sessions", "description": "List all registered sessions with live device resolution."},
+      {"name": "mod3_dashboard_post", "description": "Send response text from Claude Code to the mod3 dashboard chat panel (Path B symmetric outbound channel)."}
+    ]
   }
 }
