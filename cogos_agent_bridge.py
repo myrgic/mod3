@@ -84,6 +84,47 @@ def _now_rfc3339() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+# ---------------------------------------------------------------------------
+# ACP listener registry
+# ---------------------------------------------------------------------------
+# Sessions opened via /ws/acp register a queue here for the duration of a
+# `session/prompt` call. The response bridge dispatches kernel `agent_response`
+# events to the matching ACP queue (when present) instead of broadcasting via
+# BrowserChannel. This lets ACP sessions get end-to-end kernel-cycle responses
+# without re-implementing the agent loop on the ACP server side.
+#
+# Convention: ACP session_ids start with "mod3-acp-" so the dispatcher can
+# unambiguously route them. BrowserChannel sessions use "mod3:<channel_id>".
+# Both flow through the same kernel bus; the registry filters at delivery time.
+
+ACP_SESSION_PREFIX = "mod3-acp-"
+
+_acp_listeners: dict[str, asyncio.Queue] = {}
+
+
+def register_acp_listener(session_id: str) -> asyncio.Queue:
+    """Register a per-prompt queue for ACP session responses.
+
+    The ACP handler calls this before posting a user message; the response
+    bridge will route any matching kernel response into this queue rather
+    than the BrowserChannel broadcast path. The handler pulls (text, env)
+    tuples off the queue and emits them as ``session/update`` notifications,
+    then unregisters when the prompt completes.
+    """
+    q: asyncio.Queue = asyncio.Queue()
+    _acp_listeners[session_id] = q
+    return q
+
+
+def unregister_acp_listener(session_id: str) -> None:
+    """Remove a listener (idempotent). Call from a ``finally`` block."""
+    _acp_listeners.pop(session_id, None)
+
+
+def _has_acp_listener(session_id: Optional[str]) -> bool:
+    return bool(session_id) and session_id in _acp_listeners
+
+
 async def post_user_message(text: str, session_id: str) -> bool:
     """POST a user turn to the kernel's `bus_dashboard_chat` bus.
 
@@ -234,6 +275,25 @@ async def run_response_bridge(subscriber: KernelBusSubscriber) -> None:
             )
             first_event_logged = True
         session_id = _extract_session_id(env.payload)
+
+        # ACP session route: if an ACP listener is registered for this
+        # session, deliver the response there instead of broadcasting via
+        # BrowserChannel. ACP sessions are not BrowserChannel members —
+        # they consume the queue directly from /ws/acp.
+        if _has_acp_listener(session_id):
+            try:
+                await _acp_listeners[session_id].put((text, env))
+                forwarded += 1
+                logger.debug(
+                    "cogos-agent: routed response to ACP listener session=%s event_id=%s",
+                    session_id,
+                    env.event_id,
+                )
+                continue
+            except Exception as exc:  # noqa: BLE001 — listener may be closing
+                logger.debug("cogos-agent: ACP queue put failed: %s", exc)
+                # Fall through to the broadcast path as a backstop.
+
         try:
             BrowserChannel.broadcast_response_text(text, session_id=session_id)
             # Pair the text frame with a completion frame so the dashboard's

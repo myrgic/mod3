@@ -1333,7 +1333,6 @@ async def ws_acp(websocket: WebSocket):
     /ws/chat is not deprecated; both endpoints are live in parallel.
     """
     import json
-    import os
     from uuid import uuid4
 
     from schemas.acp import (
@@ -1374,102 +1373,77 @@ async def ws_acp(websocket: WebSocket):
         await _send(notif)
 
     async def _stream_prompt(session_id: str, text: str, request_id: int | str) -> None:
-        """Route a prompt through AgentLoop (or kernel bridge) and stream chunks."""
-        nonlocal _sessions
+        """Forward the prompt to the kernel cycle and stream the response back.
 
-        use_cogos = os.environ.get("MOD3_USE_COGOS_AGENT", "").strip().lower() in ("1", "true", "yes", "on")
+        This is the RFC-0001 transitional shape: mod3 is a thin proxy.
+        The kernel runs the actual agent cycle (foveated context, provider
+        selection, tool dispatch). Mod3's ACP handler just translates the
+        wire and routes responses back as ``session/update`` notifications.
 
-        if use_cogos:
-            # Kernel-bridged path: forward to cogos bus then wait for response.
-            from cogos_agent_bridge import post_user_message
+        The local AgentLoop path is no longer used here. ``MOD3_USE_COGOS_AGENT``
+        gates the whole flow: without it, the kernel response bridge is not
+        running, so ACP would have nowhere to receive responses from. In that
+        case we emit a structured error rather than hanging.
+        """
+        from cogos_agent_bridge import (
+            is_enabled as _bridge_enabled,
+        )
+        from cogos_agent_bridge import (
+            post_user_message,
+            register_acp_listener,
+            unregister_acp_listener,
+        )
 
-            ok = await post_user_message(text, session_id)
+        if not _bridge_enabled():
+            await _send_error(
+                request_id,
+                -32000,
+                "Kernel agent routing disabled. Set MOD3_USE_COGOS_AGENT=1 "
+                "in the mod3 environment so the kernel response bridge starts. "
+                "Without it, /ws/acp cannot receive agent responses.",
+            )
+            return
+
+        # Register a per-prompt queue BEFORE posting so we never miss the
+        # response (the kernel cycle can be fast enough that the agent_response
+        # event arrives before our post_user_message call returns).
+        queue = register_acp_listener(session_id)
+        try:
+            ok = await post_user_message(text, session_id=session_id)
             if not ok:
-                # Kernel unreachable; fall through to local path gracefully.
-                use_cogos = False
-            else:
-                # Kernel will push response via bus_dashboard_response. We can't
-                # easily intercept it here without coupling to the SSE subscriber.
-                # For now, emit a single update frame with a placeholder and rely
-                # on the BrowserChannel broadcast path to push the actual response
-                # to the /ws/chat subscribers. This is the transitional behaviour
-                # documented in RFC-0001 Section 3.
-                notif = SessionUpdateNotification.text_chunk(
-                    session_id=session_id,
-                    text="(response delivered via kernel bus -- see /ws/chat)",
+                await _send_error(
+                    request_id,
+                    -32000,
+                    "Kernel unreachable. Check COGOS_ENDPOINT and that the cogos kernel daemon is running.",
                 )
-                await _send_notification(notif.model_dump())
-                result = SessionPromptResult(stopReason="end_turn")
-                await _send_response(request_id, result)
                 return
 
-        if not use_cogos:
-            # Local AgentLoop path -- build a minimal conversation turn.
-            from agent_loop import AgentLoop
-            from providers import auto_detect_provider
-
-            provider = auto_detect_provider()
-            from pipeline_state import PipelineState
-
-            ps = PipelineState()
-            agent = AgentLoop(bus=_bus, provider=provider, pipeline_state=ps)
-
-            # Collect streamed response chunks.
-            chunks: list[str] = []
-
-            async def _on_chunk(chunk_text: str) -> None:
-                chunks.append(chunk_text)
-                notif = SessionUpdateNotification.text_chunk(
-                    session_id=session_id,
-                    text=chunk_text,
+            # Wait for at least one kernel response, then resolve the prompt.
+            # The kernel emits exactly one agent_response per user turn (see
+            # cogos_agent_bridge.run_response_bridge docstring) so receiving
+            # one chunk is sufficient to declare the turn complete.
+            try:
+                response_text, env = await asyncio.wait_for(queue.get(), timeout=60.0)
+            except asyncio.TimeoutError:
+                await _send_error(
+                    request_id,
+                    -32000,
+                    "Kernel response timeout after 60s. The kernel cycle may "
+                    "be busy or the response bridge is not delivering events.",
                 )
-                await _send_notification(notif.model_dump())
+                return
 
-            # Check if AgentLoop supports an async streaming interface.
-            # It exposes process_text_async(text, on_chunk) when available,
-            # else we fall back to the synchronous path and emit one chunk.
-            from modality import CognitiveEvent, ModalityType
-
-            event = CognitiveEvent(
-                modality=ModalityType.TEXT,
-                content=text,
-                confidence=1.0,
-                source_channel="acp",
-                timestamp=__import__("time").time(),
+            # Stream the response as a text_chunk update, then resolve the prompt.
+            notif = SessionUpdateNotification.text_chunk(
+                session_id=session_id,
+                text=response_text,
             )
-
-            if asyncio.iscoroutinefunction(getattr(agent, "process_text_async", None)):
-                await agent.process_text_async(event, on_chunk=_on_chunk)  # pyright: ignore[reportAttributeAccessIssue]
-            elif hasattr(agent, "handle_event"):
-                # Synchronous handle_event; collect full response, then emit.
-                collected_response: list[str] = []
-
-                class _MockChannel:
-                    async def send_response_text(self, txt: str) -> None:
-                        collected_response.append(txt)
-
-                    async def send_response_complete(self, *a, **kw) -> None:
-                        pass
-
-                agent._channel_ref = _MockChannel()  # pyright: ignore[reportAttributeAccessIssue]
-                await agent.handle_event(event)
-                full = "".join(collected_response)
-                if full:
-                    notif = SessionUpdateNotification.text_chunk(
-                        session_id=session_id,
-                        text=full,
-                    )
-                    await _send_notification(notif.model_dump())
-            else:
-                # Fallback: no viable streaming path.
-                notif = SessionUpdateNotification.text_chunk(
-                    session_id=session_id,
-                    text="(AgentLoop does not expose a streaming interface in this build)",
-                )
-                await _send_notification(notif.model_dump())
-
-        result = SessionPromptResult(stopReason="end_turn")
-        await _send_response(request_id, result)
+            await _send_notification(notif.model_dump())
+            result = SessionPromptResult(stopReason="end_turn")
+            await _send_response(request_id, result)
+            return
+        finally:
+            unregister_acp_listener(session_id)
 
     try:
         while True:
@@ -1505,7 +1479,7 @@ async def ws_acp(websocket: WebSocket):
 
             # ---- session/new ----
             elif method == "session/new":
-                session_id = f"mod3-{uuid4().hex[:12]}"
+                session_id = f"mod3-acp-{uuid4().hex[:12]}"
                 _sessions[session_id] = {"cancel": asyncio.Event()}
                 result = SessionNewResult(sessionId=session_id)
                 await _send_response(msg_id, result)
