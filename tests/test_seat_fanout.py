@@ -15,8 +15,6 @@ Run with:
 from __future__ import annotations
 
 import asyncio
-import json
-import os
 import sys
 from pathlib import Path
 
@@ -25,7 +23,6 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from seats import Seat, SeatRegistry  # noqa: E402
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -176,7 +173,7 @@ class TestDashboardChatEchoSuppression:
     @pytest.fixture(autouse=True)
     def _clean_seats(self):
         """Ensure each test starts with a fresh seat registry."""
-        from seats import _registry_lock, get_seat_registry
+        from seats import get_seat_registry
 
         # Reset the singleton by clearing its internal state
         reg = get_seat_registry()
@@ -188,7 +185,7 @@ class TestDashboardChatEchoSuppression:
 
     def test_dashboard_chat_does_not_echo_to_sender(self, client):
         """POST /v1/dashboard-chat with seat_id must not deliver to that seat."""
-        from seats import Seat, get_seat_registry
+        from seats import get_seat_registry
 
         reg = get_seat_registry()
 
