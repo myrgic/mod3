@@ -81,21 +81,17 @@ async def _lifespan(application: FastAPI):
       1. Kokoro warmup — spawns a daemon thread; non-blocking, never fails startup.
       2. Kernel-bus bridge — subscribes to cycle-trace events for the dashboard.
          Non-blocking: the subscriber's backoff loop handles an unreachable kernel.
-      3. CogOS agent bridge — forwards kernel agent replies to the dashboard WS.
-         No-op unless MOD3_USE_COGOS_AGENT=1 is set.
 
     Shutdown order (post-yield, reverse of startup):
-      3. Stop CogOS agent bridge.
       2. Stop kernel-bus bridge.
+      1. STT executor drain.
 
     Each phase catches and logs its own errors so a failure in one phase does not
-    prevent the remaining phases from running (preserving the original semantics of
-    the per-hook try/except blocks).
+    prevent the remaining phases from running.
     """
     import threading
 
     from bus_bridge_runner import start_bridge, stop_bridge
-    from cogos_agent_bridge import start_response_bridge, stop_response_bridge
 
     # --- startup ---
 
@@ -117,21 +113,9 @@ async def _lifespan(application: FastAPI):
     except Exception as e:  # noqa: BLE001 — never fail startup on bridge wiring
         logger.warning("bus-bridge startup failed (non-fatal): %s", e)
 
-    # 3. CogOS agent response bridge (no-op when MOD3_USE_COGOS_AGENT is unset)
-    try:
-        await start_response_bridge(application.state)
-    except Exception as e:  # noqa: BLE001 — never fail startup on bridge wiring
-        logger.warning("cogos-agent startup failed (non-fatal): %s", e)
-
     yield  # application is running
 
     # --- shutdown (reverse order) ---
-
-    # 3. Stop CogOS agent bridge
-    try:
-        await stop_response_bridge(application.state, timeout_s=2.0)
-    except Exception as e:  # noqa: BLE001
-        logger.debug("cogos-agent shutdown error (non-fatal): %s", e)
 
     # 2. Stop kernel-bus bridge
     try:
@@ -1214,12 +1198,6 @@ def health():
         # Overall status: ok if at least one TTS engine loaded, degraded if none
         status = "ok" if loaded else "degraded"
 
-        # cogos_agent_enabled reflects MOD3_USE_COGOS_AGENT at runtime so the
-        # dashboard settings panel can show "Kernel cycle" vs "Local AgentLoop".
-        import os
-
-        cogos_agent_enabled = os.environ.get("MOD3_USE_COGOS_AGENT", "0") == "1"
-
         return {
             "status": status,
             "service": "mod3",
@@ -1231,7 +1209,7 @@ def health():
                 "depth": total,
                 "active_jobs": active,
             },
-            "cogos_agent_enabled": cogos_agent_enabled,
+            "routing": "channel-client",
         }
     except Exception as e:
         return JSONResponse(
@@ -1574,8 +1552,9 @@ async def ws_acp(websocket: WebSocket):
       session/prompt  -- submit a user prompt (streams via session/update notifications)
       session/cancel  -- cancel in-flight prompt (notification, no response)
 
-    Both local AgentLoop and kernel-bridged agent are supported via the
-    MOD3_USE_COGOS_AGENT environment variable (same toggle as /ws/chat).
+    Prompts are fanned to attached channel-client seats via the seat registry.
+    Responses flow through the channel client (speak / mod3_dashboard_post),
+    not back through this WebSocket.
 
     /ws/chat is not deprecated; both endpoints are live in parallel.
     """
@@ -1620,77 +1599,43 @@ async def ws_acp(websocket: WebSocket):
         await _send(notif)
 
     async def _stream_prompt(session_id: str, text: str, request_id: int | str) -> None:
-        """Forward the prompt to the kernel cycle and stream the response back.
+        """Fan the prompt to all channel-client seats in this session.
 
-        This is the RFC-0001 transitional shape: mod3 is a thin proxy.
-        The kernel runs the actual agent cycle (foveated context, provider
-        selection, tool dispatch). Mod3's ACP handler just translates the
-        wire and routes responses back as ``session/update`` notifications.
+        The kernel bus bridge (cogos_agent_bridge) has been removed in favour of
+        the channel-client architecture (PR #40). /ws/acp now fans the prompt
+        through ``POST /v1/sessions/{session_id}/messages`` so Claude Code
+        channel clients receive it as ``notifications/claude/channel``.
 
-        The local AgentLoop path is no longer used here. ``MOD3_USE_COGOS_AGENT``
-        gates the whole flow: without it, the kernel response bridge is not
-        running, so ACP would have nowhere to receive responses from. In that
-        case we emit a structured error rather than hanging.
+        Responses flow back through the channel client's mod3_dashboard_post
+        tool or speak tool — not through this WebSocket. The ACP caller
+        therefore receives a single resolution frame immediately after fan-out.
         """
-        from cogos_agent_bridge import (
-            is_enabled as _bridge_enabled,
-        )
-        from cogos_agent_bridge import (
-            post_user_message,
-            register_acp_listener,
-            unregister_acp_listener,
-        )
+        from seats import get_seat_registry
 
-        if not _bridge_enabled():
+        registry = get_seat_registry()
+        seats_count = registry.fan_out(
+            session_id,
+            {
+                "type": "user_message",
+                "content": text,
+                "input_type": "text",
+                "role": "user",
+            },
+        )
+        if seats_count == 0:
             await _send_error(
                 request_id,
                 -32000,
-                "Kernel agent routing disabled. Set MOD3_USE_COGOS_AGENT=1 "
-                "in the mod3 environment so the kernel response bridge starts. "
-                "Without it, /ws/acp cannot receive agent responses.",
+                "No channel-client seats attached to this session. "
+                "Start a session with 'claude --dangerously-load-development-channels server:mod3' "
+                "so a channel client is present to handle the prompt.",
             )
             return
 
-        # Register a per-prompt queue BEFORE posting so we never miss the
-        # response (the kernel cycle can be fast enough that the agent_response
-        # event arrives before our post_user_message call returns).
-        queue = register_acp_listener(session_id)
-        try:
-            ok = await post_user_message(text, session_id=session_id)
-            if not ok:
-                await _send_error(
-                    request_id,
-                    -32000,
-                    "Kernel unreachable. Check COGOS_ENDPOINT and that the cogos kernel daemon is running.",
-                )
-                return
-
-            # Wait for at least one kernel response, then resolve the prompt.
-            # The kernel emits exactly one agent_response per user turn (see
-            # cogos_agent_bridge.run_response_bridge docstring) so receiving
-            # one chunk is sufficient to declare the turn complete.
-            try:
-                response_text, env = await asyncio.wait_for(queue.get(), timeout=60.0)
-            except asyncio.TimeoutError:
-                await _send_error(
-                    request_id,
-                    -32000,
-                    "Kernel response timeout after 60s. The kernel cycle may "
-                    "be busy or the response bridge is not delivering events.",
-                )
-                return
-
-            # Stream the response as a text_chunk update, then resolve the prompt.
-            notif = SessionUpdateNotification.text_chunk(
-                session_id=session_id,
-                text=response_text,
-            )
-            await _send_notification(notif.model_dump())
-            result = SessionPromptResult(stopReason="end_turn")
-            await _send_response(request_id, result)
-            return
-        finally:
-            unregister_acp_listener(session_id)
+        # Resolve immediately — responses flow through the channel client,
+        # not back through this WebSocket connection.
+        result = SessionPromptResult(stopReason="end_turn")
+        await _send_response(request_id, result)
 
     try:
         while True:

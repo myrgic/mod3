@@ -15,10 +15,10 @@ Server→client WebSocket message types:
   trace_event  — kernel cycle-trace events (ADR-083), fanned out via
                  BrowserChannel.broadcast_trace_event().
 
-The MOD3_USE_COGOS_AGENT kernel-bridged path emits response_text AND
-response_complete via BrowserChannel.broadcast_response_{text,complete}
-so the dashboard UI's turn-done signal fires on every turn, matching the
-local-inference path's behavior.
+Text input from the dashboard is forwarded to channel-client seats via
+the seat registry (POST /v1/sessions/{id}/messages), so Claude Code
+receives it as notifications/claude/channel. Responses flow back through
+mod3_dashboard_post and speak tools on the channel client.
 """
 
 from __future__ import annotations
@@ -551,17 +551,13 @@ class BrowserChannel:
     def broadcast_response_text(cls, text: str, session_id: str | None = None) -> None:
         """Push an agent-reply text frame to dashboard WebSocket clients.
 
-        Used by the MOD3_USE_COGOS_AGENT response bridge (see
-        `cogos_agent_bridge.run_response_bridge`). The frame matches the
-        existing text-response shape emitted by `_deliver_async` and
-        `send_response_text`: `{"type": "response_text", "text": <text>}`.
+        The frame matches the existing text-response shape emitted by
+        `_deliver_async` and `send_response_text`:
+        `{"type": "response_text", "text": <text>}`.
 
         If `session_id` is None (default) the frame is broadcast to every
-        active dashboard channel. When provided, only channels whose
-        `channel_id` matches the `mod3:<channel_id>` convention from
-        `cogos_agent_bridge.post_user_message` receive the frame — this is
-        how future multi-user routing will land, but for v1 a None
-        broadcast is the common case (only one dashboard attached).
+        active dashboard channel. When provided with a `mod3:<channel_id>`
+        prefix, only the matching channel receives the frame.
 
         Thread-safe: dispatches each WS send via `run_coroutine_threadsafe`
         on the channel's own loop, matching `broadcast_trace_event`.
@@ -589,17 +585,10 @@ class BrowserChannel:
     ) -> None:
         """Push a `response_complete` frame to dashboard WebSocket clients.
 
-        Companion to :meth:`broadcast_response_text`: the MOD3_USE_COGOS_AGENT
-        response bridge emits exactly one complete-frame per kernel
-        `agent_response` event so the dashboard UI's per-turn `isResponding`
-        state gets cleared (otherwise the chat panel spinner hangs forever).
-
-        Routing and threading match `broadcast_response_text` 1:1 — pass the
-        same `session_id` so the completion frame lands on the same channel
-        that received the text frames for this turn. `metrics` follows the
-        local-path convention from `agent_loop._process` (`{"llm_ms": ...,
-        "provider": ...}`); the kernel path populates it with
-        `{"provider": "cogos-agent", ...}`.
+        Companion to :meth:`broadcast_response_text`. Routing and threading
+        match `broadcast_response_text` 1:1 — pass the same `session_id` so
+        the completion frame lands on the same channel that received the text
+        frames for this turn.
         """
         rcf = ResponseCompleteFrame(type="response_complete", metrics=metrics or {})
         frame = rcf.model_dump(exclude_none=True)

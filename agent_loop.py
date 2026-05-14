@@ -183,36 +183,6 @@ class AgentLoop:
         # and stash on self._pending_bargein. A3 will consume it for prompt injection.
         self._prepare_bargein_context(user_text=event.content)
 
-        # MOD3_USE_COGOS_AGENT fork: forward user turn to kernel bus instead of
-        # calling local provider. Response arrives asynchronously via the
-        # cogos_agent_bridge → BrowserChannel.broadcast_response_text path.
-        from cogos_agent_bridge import is_enabled as _cogos_agent_enabled
-        from cogos_agent_bridge import post_user_message as _post_user_message
-
-        if _cogos_agent_enabled():
-            session_id = f"mod3:{self.channel_id or 'unknown'}"
-            # Fold any pending barge-in context into the forwarded text so the
-            # kernel cycle sees it. A full structured payload will come in a
-            # later iteration; for v1 we prepend the terse prompt renderer.
-            forwarded_text = event.content
-            pending = self._pending_bargein
-            if pending is not None:
-                self._pending_bargein = None
-                forwarded_text = "[interrupted earlier] " + pending.format_for_prompt() + "\n" + forwarded_text
-            ok = await _post_user_message(forwarded_text, session_id=session_id)
-            if not ok and self._channel_ref:
-                try:
-                    await self._channel_ref.send_response_text("[cogos-agent unreachable — check kernel]")
-                    await self._channel_ref.send_response_complete(
-                        metrics={"provider": "cogos-agent", "error": "unreachable"}
-                    )
-                except Exception:
-                    pass
-            # Track the user turn in history so subsequent turns carry it.
-            self.conversation.append({"role": "user", "content": event.content})
-            self._trim_history()
-            return
-
         self.conversation.append({"role": "user", "content": event.content})
         self._trim_history()
 

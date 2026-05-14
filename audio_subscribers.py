@@ -2,12 +2,11 @@
 
 A separate, tiny module so the routing surface stays independent of the
 session registry (which is already load-bearing for ADR-082 Phase 1). The
-dashboard WebSocket lands here; ``mcp_shim._play_wav_bytes`` queries this
-registry before falling back to sounddevice; the kernel queries the
+dashboard WebSocket lands here; the kernel queries the
 ``/v1/sessions/{id}/subscribers`` HTTP endpoint before spawning afplay.
 
 Thread-safety: registration happens in FastAPI's event loop thread (WS
-handler), lookup and emit happen from the MCP shim playback thread. A
+handler), lookup and emit happen from the server playback thread. A
 single RLock around the dict is sufficient — the set-per-session is small
 (usually 1 dashboard) and contention is effectively zero.
 
@@ -235,7 +234,7 @@ async def _send_rtvi_frames(ws: "WebSocket", frames: list[str]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Process-global default registry — shared between http_api and mcp_shim.
+# Process-global default registry — shared by http_api and server.
 # ---------------------------------------------------------------------------
 
 _default_registry: AudioSubscriberRegistry | None = None
