@@ -974,6 +974,11 @@ def health():
         # Overall status: ok if at least one TTS engine loaded, degraded if none
         status = "ok" if loaded else "degraded"
 
+        # cogos_agent_enabled reflects MOD3_USE_COGOS_AGENT at runtime so the
+        # dashboard settings panel can show "Kernel cycle" vs "Local AgentLoop".
+        import os
+        cogos_agent_enabled = os.environ.get("MOD3_USE_COGOS_AGENT", "0") == "1"
+
         return {
             "status": status,
             "service": "mod3",
@@ -985,6 +990,7 @@ def health():
                 "depth": total,
                 "active_jobs": active,
             },
+            "cogos_agent_enabled": cogos_agent_enabled,
         }
     except Exception as e:
         return JSONResponse(

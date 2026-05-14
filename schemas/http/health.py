@@ -22,6 +22,10 @@ class HealthResponse(_Base):
     modalities: dict[str, bool] = Field(default_factory=dict)
     queue: dict[str, int] = Field(default_factory=dict)
     error: str | None = Field(default=None)
+    # cogos_agent_enabled reflects MOD3_USE_COGOS_AGENT at runtime.
+    # True = kernel-cycle agent routing active; False = local AgentLoop.
+    # Exposed so the dashboard settings panel can show the current backend.
+    cogos_agent_enabled: bool = False
 
 
 class ShutdownRequest(_Base):

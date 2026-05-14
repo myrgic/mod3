@@ -326,71 +326,129 @@
 
   <!-- Settings panel (collapsed by default) -->
   <div id="settings-panel" style="display:none; background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:12px 16px; margin-bottom:8px;">
-    <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:end;">
-      <div class="form-group">
-        <label>TTS Model</label>
-        <select id="voice-model">
-          <option value="kokoro" selected>Kokoro 82M (fast)</option>
-          <option value="voxtral">Voxtral 4B (quality)</option>
-          <option value="chatterbox">Chatterbox (clone)</option>
-          <option value="spark">Spark 0.5B</option>
-        </select>
+
+    <!-- Transport section -->
+    <div style="margin-bottom:10px;">
+      <div style="font-size:0.7rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px;">Transport</div>
+      <div style="display:flex; gap:16px; align-items:center; flex-wrap:wrap;">
+        <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:0.85rem;">
+          <input type="radio" name="transport" id="transport-chat" value="chat"> /ws/chat (legacy)
+        </label>
+        <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:0.85rem;">
+          <input type="radio" name="transport" id="transport-acp" value="acp"> /ws/acp (ACP)
+        </label>
+        <span id="transport-reload-notice" style="display:none; font-size:0.7rem; color:var(--orange); margin-left:4px;">Reload page to apply</span>
       </div>
-      <div class="form-group">
-        <label>Voice</label>
-        <select id="voice-voice">
-          <option value="">Default</option>
-          <optgroup label="Kokoro">
-            <option value="bm_lewis" selected>bm_lewis</option>
-            <option value="af_heart">af_heart</option>
-            <option value="af_bella">af_bella</option>
-            <option value="af_nicole">af_nicole</option>
-            <option value="af_sarah">af_sarah</option>
-            <option value="af_sky">af_sky</option>
-            <option value="am_adam">am_adam</option>
-            <option value="am_michael">am_michael</option>
-            <option value="bf_emma">bf_emma</option>
-            <option value="bf_isabella">bf_isabella</option>
-            <option value="bm_george">bm_george</option>
-          </optgroup>
-          <optgroup label="Voxtral">
-            <option value="casual_female">casual_female</option>
-            <option value="casual_male">casual_male</option>
-            <option value="neutral_female">neutral_female</option>
-            <option value="neutral_male">neutral_male</option>
-          </optgroup>
-        </select>
+    </div>
+
+    <!-- Agent backend indicator -->
+    <div style="margin-bottom:10px; display:flex; align-items:center; gap:8px;">
+      <div style="font-size:0.7rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px;">Agent Backend</div>
+      <span id="agent-backend-badge" style="font-size:0.7rem; padding:2px 8px; border-radius:8px; border:1px solid var(--border); color:var(--muted); background:var(--bg);">checking...</span>
+    </div>
+
+    <!-- Voice synthesis section -->
+    <div style="margin-bottom:10px;">
+      <div style="font-size:0.7rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px;">Voice Synthesis</div>
+      <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:end;">
+        <div class="form-group">
+          <label>TTS Model</label>
+          <select id="voice-model">
+            <option value="kokoro" selected>Kokoro 82M (fast)</option>
+            <option value="voxtral">Voxtral 4B (quality)</option>
+            <option value="chatterbox">Chatterbox (clone)</option>
+            <option value="spark">Spark 0.5B</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Voice</label>
+          <select id="voice-voice">
+            <option value="">Default</option>
+            <optgroup label="Kokoro">
+              <option value="bm_lewis" selected>bm_lewis</option>
+              <option value="af_heart">af_heart</option>
+              <option value="af_bella">af_bella</option>
+              <option value="af_nicole">af_nicole</option>
+              <option value="af_sarah">af_sarah</option>
+              <option value="af_sky">af_sky</option>
+              <option value="am_adam">am_adam</option>
+              <option value="am_michael">am_michael</option>
+              <option value="bf_emma">bf_emma</option>
+              <option value="bf_isabella">bf_isabella</option>
+              <option value="bm_george">bm_george</option>
+            </optgroup>
+            <optgroup label="Voxtral">
+              <option value="casual_female">casual_female</option>
+              <option value="casual_male">casual_male</option>
+              <option value="neutral_female">neutral_female</option>
+              <option value="neutral_male">neutral_male</option>
+            </optgroup>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Speed</label>
+          <select id="tts-speed">
+            <option value="1.0">1.0x</option>
+            <option value="1.25" selected>1.25x</option>
+            <option value="1.5">1.5x</option>
+            <option value="2.0">2.0x</option>
+          </select>
+        </div>
+        <div class="form-group" id="emotion-group" style="display:none;">
+          <label>Emotion <span style="font-size:0.65rem; color:var(--muted);">(Chatterbox)</span></label>
+          <div style="display:flex; align-items:center; gap:6px;">
+            <input type="range" id="tts-emotion" min="0" max="1" step="0.05" value="0.5" style="width:80px; accent-color:var(--accent);">
+            <span id="tts-emotion-val" style="font-size:0.8rem; color:var(--muted); min-width:28px;">0.50</span>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>VAD Sensitivity</label>
+          <select id="vad-mode">
+            <option value="0.3">Very Sensitive</option>
+            <option value="0.5" selected>Normal</option>
+            <option value="0.7">Low (noisy room)</option>
+            <option value="0.85">Very Low</option>
+          </select>
+        </div>
       </div>
-      <div class="form-group">
-        <label>Output Device</label>
-        <select id="audio-output">
-          <option value="">Default</option>
-        </select>
+    </div>
+
+    <!-- Audio devices section -->
+    <div style="margin-bottom:10px;">
+      <div style="font-size:0.7rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px;">Audio Devices</div>
+      <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:end;">
+        <div class="form-group">
+          <label>Output Device</label>
+          <select id="audio-output">
+            <option value="">Default</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Input Device</label>
+          <select id="audio-input">
+            <option value="">Default</option>
+          </select>
+        </div>
       </div>
-      <div class="form-group">
-        <label>Input Device</label>
-        <select id="audio-input">
-          <option value="">Default</option>
-        </select>
+    </div>
+
+    <!-- Advanced (collapsible) -->
+    <details style="margin-bottom:6px;">
+      <summary style="font-size:0.7rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; cursor:pointer; user-select:none;">Advanced</summary>
+      <div style="margin-top:8px; display:flex; gap:12px; flex-wrap:wrap; align-items:end;">
+        <div class="form-group">
+          <label>Audio Sidecar Mode</label>
+          <select id="audio-sidecar-mode">
+            <option value="rtvi" selected>RTVI 1.3.0 (default)</option>
+            <option value="legacy">Legacy audio_header</option>
+          </select>
+        </div>
       </div>
-      <div class="form-group">
-        <label>VAD Sensitivity</label>
-        <select id="vad-mode">
-          <option value="0.3">Very Sensitive</option>
-          <option value="0.5" selected>Normal</option>
-          <option value="0.7">Low (noisy room)</option>
-          <option value="0.85">Very Low</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label>Speed</label>
-        <select id="tts-speed">
-          <option value="1.0">1.0x</option>
-          <option value="1.25" selected>1.25x</option>
-          <option value="1.5">1.5x</option>
-          <option value="2.0">2.0x</option>
-        </select>
-      </div>
+    </details>
+
+    <!-- Reset button -->
+    <div style="margin-top:8px;">
+      <button id="settings-reset-btn" style="background:none; border:1px solid var(--border); border-radius:4px; padding:4px 12px; color:var(--muted); cursor:pointer; font-size:0.75rem;">Reset to defaults</button>
     </div>
   </div>
 
@@ -421,6 +479,174 @@ document.getElementById('settings-toggle').addEventListener('click', () => {
   const panel = document.getElementById('settings-panel');
   panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
 });
+
+// --- Settings persistence (localStorage) ---
+// All keys in one place so Reset can clear them atomically.
+const SETTINGS_KEYS = {
+  transport:   'mod3.transport',    // 'chat' | 'acp'
+  ttsModel:    'mod3.ttsModel',
+  ttsVoice:    'mod3.ttsVoice',
+  ttsSpeed:    'mod3.ttsSpeed',
+  ttsEmotion:  'mod3.ttsEmotion',
+  vadMode:     'mod3.vadMode',
+  audioSidecar:'mod3.audioSidecar', // 'rtvi' | 'legacy'
+};
+
+// getTransportPref — URL param wins, else localStorage, else default 'chat'.
+function getTransportPref() {
+  const urlParam = new URLSearchParams(window.location.search).get('acp');
+  if (urlParam === '1') return 'acp';
+  const stored = localStorage.getItem(SETTINGS_KEYS.transport);
+  if (stored === 'acp' || stored === 'chat') return stored;
+  return 'chat';
+}
+
+function saveTransportPref(val) {
+  try { localStorage.setItem(SETTINGS_KEYS.transport, val); } catch {}
+}
+
+// Apply stored settings to UI controls on page load.
+(function applyStoredSettings() {
+  const transport = getTransportPref();
+  const chatRadio = document.getElementById('transport-chat');
+  const acpRadio  = document.getElementById('transport-acp');
+  if (chatRadio && acpRadio) {
+    chatRadio.checked = transport === 'chat';
+    acpRadio.checked  = transport === 'acp';
+  }
+
+  const stored = (key, el, fallback) => {
+    if (!el) return;
+    const v = localStorage.getItem(key);
+    if (v !== null) el.value = v;
+    else if (fallback !== undefined) el.value = fallback;
+  };
+  stored(SETTINGS_KEYS.ttsModel,    document.getElementById('voice-model'), 'kokoro');
+  stored(SETTINGS_KEYS.ttsVoice,    document.getElementById('voice-voice'), 'bm_lewis');
+  stored(SETTINGS_KEYS.ttsSpeed,    document.getElementById('tts-speed'),   '1.25');
+  stored(SETTINGS_KEYS.ttsEmotion,  document.getElementById('tts-emotion'), '0.5');
+  stored(SETTINGS_KEYS.vadMode,     document.getElementById('vad-mode'),    '0.5');
+  stored(SETTINGS_KEYS.audioSidecar,document.getElementById('audio-sidecar-mode'), 'rtvi');
+
+  // Sync emotion display value
+  const emotionEl = document.getElementById('tts-emotion');
+  const emotionVal = document.getElementById('tts-emotion-val');
+  if (emotionEl && emotionVal) emotionVal.textContent = parseFloat(emotionEl.value).toFixed(2);
+})();
+
+// Transport radio change
+(function wireTransportRadios() {
+  const chatRadio = document.getElementById('transport-chat');
+  const acpRadio  = document.getElementById('transport-acp');
+  const notice    = document.getElementById('transport-reload-notice');
+  if (!chatRadio || !acpRadio) return;
+
+  [chatRadio, acpRadio].forEach(r => {
+    r.addEventListener('change', () => {
+      const val = r.value;
+      saveTransportPref(val);
+      if (notice) {
+        notice.style.display = 'inline';
+        setTimeout(() => { if (notice) notice.style.display = 'none'; }, 5000);
+      }
+      console.log('[Settings] Transport changed to:', val);
+    });
+  });
+})();
+
+// Emotion slider display + persistence
+(function wireEmotionSlider() {
+  const slider = document.getElementById('tts-emotion');
+  const display = document.getElementById('tts-emotion-val');
+  if (!slider) return;
+  slider.addEventListener('input', () => {
+    const v = parseFloat(slider.value).toFixed(2);
+    if (display) display.textContent = v;
+    try { localStorage.setItem(SETTINGS_KEYS.ttsEmotion, slider.value); } catch {}
+    if (window._transport && window._transport.connected) {
+      window._transport.setConfig({ emotion: parseFloat(slider.value) });
+    }
+  });
+})();
+
+// Show/hide emotion slider based on selected TTS model
+(function wireModelEmotionVisibility() {
+  const modelSel  = document.getElementById('voice-model');
+  const emotGroup = document.getElementById('emotion-group');
+  if (!modelSel || !emotGroup) return;
+
+  function syncVisibility() {
+    emotGroup.style.display = modelSel.value === 'chatterbox' ? 'flex' : 'none';
+  }
+  syncVisibility();
+  modelSel.addEventListener('change', () => {
+    syncVisibility();
+    try { localStorage.setItem(SETTINGS_KEYS.ttsModel, modelSel.value); } catch {}
+  });
+})();
+
+// Persist voice select
+(function wireVoicePersist() {
+  const el = document.getElementById('voice-voice');
+  if (!el) return;
+  el.addEventListener('change', () => {
+    try { localStorage.setItem(SETTINGS_KEYS.ttsVoice, el.value); } catch {}
+  });
+})();
+
+// Persist speed select
+(function wireSpeedPersist() {
+  const el = document.getElementById('tts-speed');
+  if (!el) return;
+  el.addEventListener('change', () => {
+    try { localStorage.setItem(SETTINGS_KEYS.ttsSpeed, el.value); } catch {}
+  });
+})();
+
+// Persist VAD mode
+(function wireVadPersist() {
+  const el = document.getElementById('vad-mode');
+  if (!el) return;
+  el.addEventListener('change', () => {
+    try { localStorage.setItem(SETTINGS_KEYS.vadMode, el.value); } catch {}
+  });
+})();
+
+// Persist audio sidecar mode
+(function wireAudioSidecarPersist() {
+  const el = document.getElementById('audio-sidecar-mode');
+  if (!el) return;
+  el.addEventListener('change', () => {
+    try { localStorage.setItem(SETTINGS_KEYS.audioSidecar, el.value); } catch {}
+    console.log('[Settings] Audio sidecar mode:', el.value);
+  });
+})();
+
+// Reset button — clears all mod3.* localStorage keys
+document.getElementById('settings-reset-btn').addEventListener('click', () => {
+  Object.values(SETTINGS_KEYS).forEach(k => { try { localStorage.removeItem(k); } catch {} });
+  // Also clear the output device key owned by the device selector
+  try { localStorage.removeItem('mod3-output-device'); } catch {}
+  console.log('[Settings] Reset to defaults');
+  location.reload();
+});
+
+// Agent backend badge — fetch /health and show cogos_agent_enabled state
+(function loadAgentBackendBadge() {
+  const badge = document.getElementById('agent-backend-badge');
+  if (!badge) return;
+  fetch('/health')
+    .then(r => r.json())
+    .then(data => {
+      const using = data.cogos_agent_enabled === true;
+      badge.textContent = using ? 'Kernel cycle' : 'Local AgentLoop';
+      badge.style.color = using ? 'var(--accent)' : 'var(--muted)';
+      badge.style.borderColor = using ? 'var(--accent)' : 'var(--border)';
+    })
+    .catch(() => {
+      badge.textContent = 'unknown';
+    });
+})();
 
 // --- Connection status indicators ---
 const statusDots = {
@@ -727,10 +953,9 @@ function finalizeAssistant(suffix) {
 async function sendTextMessage(text) {
   appendMessage('user', text, 'text');
 
-  // Default chat path: /ws/chat (typed via schemas.ws_chat — the working wire today).
-  // ACP transport is opt-in via ?acp=1 while the server-side prompt routing
-  // gets properly wired into AgentLoop. Both endpoints are live on the daemon.
-  const useAcp = new URLSearchParams(window.location.search).get('acp') === '1';
+  // Transport selection: URL param wins, else localStorage (mod3.transport), else /ws/chat.
+  // getTransportPref() is defined in the settings block above.
+  const useAcp = typeof getTransportPref === 'function' && getTransportPref() === 'acp';
   if (useAcp && window._acpTransport) {
     try {
       const acpT = window._acpTransport;
@@ -1430,9 +1655,10 @@ chatInput.addEventListener('input', () => {
  * renderer used by the /ws/chat path, so the chat UI is transport-agnostic.
  */
 (function setupAcpTransport() {
-  const useAcp = new URLSearchParams(window.location.search).get('acp') === '1';
+  // Transport pref: URL param ?acp=1 wins, else localStorage mod3.transport, else /ws/chat default.
+  const useAcp = typeof getTransportPref === 'function' && getTransportPref() === 'acp';
   if (!useAcp) {
-    console.log('[ACP] /ws/chat default mode -- ACP transport disabled (add ?acp=1 to enable)');
+    console.log('[ACP] /ws/chat default mode -- ACP transport disabled (set Transport to ACP in settings or add ?acp=1)');
     return;
   }
 
