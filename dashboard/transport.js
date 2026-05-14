@@ -93,6 +93,12 @@ class VoiceTransport {
     if (handler && this.handlers[handler]) {
       this.handlers[handler](msg);
     }
+    // Push to substrate visibility panel (if open).
+    if (window.__mod3OpsEvent) {
+      const preview = msg.type === 'response_text' ? ` "${msg.text?.substring(0, 40)}"` :
+                      msg.type === 'transcript' ? ` "${msg.text?.substring(0, 40)}"` : '';
+      window.__mod3OpsEvent(`${msg.type}${preview}`);
+    }
   }
 
   sendAudio(pcmBuffer) {

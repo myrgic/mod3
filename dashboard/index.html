@@ -471,6 +471,38 @@
   </div>
 
   <div class="hint">For voice, use headphones. Speak naturally — the system detects when you start and stop. Speak during playback to interrupt.</div>
+
+  <!-- Substrate visibility panel (collapsed by default) -->
+  <details id="ops-panel" style="margin-top:8px; border:1px solid var(--border); border-radius:6px; background:var(--surface);">
+    <summary style="font-size:0.7rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; cursor:pointer; padding:6px 12px; user-select:none;">Substrate Status</summary>
+    <div style="padding:8px 12px 10px; font-size:0.75rem; font-family:monospace; display:grid; grid-template-columns:1fr 1fr; gap:8px;" id="ops-panel-body">
+      <!-- Kernel health -->
+      <div>
+        <div style="color:var(--muted); font-size:0.65rem; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Kernel (6931)</div>
+        <div id="ops-kernel-status">checking...</div>
+      </div>
+      <!-- Mod3 daemon health -->
+      <div>
+        <div style="color:var(--muted); font-size:0.65rem; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Mod3 Daemon</div>
+        <div id="ops-mod3-status">checking...</div>
+      </div>
+      <!-- Active seats -->
+      <div>
+        <div style="color:var(--muted); font-size:0.65rem; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Active Seats</div>
+        <div id="ops-seats">--</div>
+      </div>
+      <!-- Routing mode -->
+      <div>
+        <div style="color:var(--muted); font-size:0.65rem; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Routing</div>
+        <div id="ops-routing" style="color:var(--accent);">channel-client</div>
+      </div>
+      <!-- Recent channel events -->
+      <div style="grid-column:1/-1;">
+        <div style="color:var(--muted); font-size:0.65rem; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Recent Events (last 10)</div>
+        <div id="ops-events" style="max-height:100px; overflow-y:auto; color:var(--muted); font-size:0.7rem; line-height:1.6;">--</div>
+      </div>
+    </div>
+  </details>
 </div>
 
 <script>
@@ -479,6 +511,119 @@ document.getElementById('settings-toggle').addEventListener('click', () => {
   const panel = document.getElementById('settings-panel');
   panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
 });
+
+// --- Substrate visibility panel ---
+// Polls kernel health, mod3 health, and seat count when the panel is open.
+// No dependencies — vanilla fetch + DOM updates only.
+(function opsPanelSetup() {
+  const KERNEL_URL = 'http://localhost:6931/v1/health';
+  const MOD3_HEALTH_URL = '/health';
+  const SEATS_URL_FN = () => {
+    // Use a fixed session id "main" for the seat count probe.
+    return '/v1/sessions/main/seats';
+  };
+  const OPS_EVENTS = [];
+  const MAX_EVENTS = 10;
+
+  function renderEvents() {
+    const el = document.getElementById('ops-events');
+    if (!el) return;
+    if (OPS_EVENTS.length === 0) { el.textContent = '--'; return; }
+    el.innerHTML = OPS_EVENTS.slice(-MAX_EVENTS).reverse().map(e =>
+      `<div style="white-space:pre-wrap;">${e}</div>`
+    ).join('');
+  }
+
+  function addEvent(text) {
+    const ts = new Date().toLocaleTimeString();
+    OPS_EVENTS.push(`[${ts}] ${text}`);
+    if (OPS_EVENTS.length > MAX_EVENTS * 2) OPS_EVENTS.splice(0, OPS_EVENTS.length - MAX_EVENTS);
+    renderEvents();
+  }
+
+  async function pollKernel() {
+    const el = document.getElementById('ops-kernel-status');
+    if (!el) return;
+    try {
+      const r = await fetch(KERNEL_URL, { signal: AbortSignal.timeout(2500) });
+      if (r.ok) {
+        const d = await r.json();
+        const st = d.state || d.status || 'ok';
+        const ver = d.version ? ` v${d.version}` : '';
+        el.textContent = `${st}${ver}`;
+        el.style.color = 'var(--accent)';
+      } else {
+        el.textContent = `HTTP ${r.status}`;
+        el.style.color = 'var(--red)';
+      }
+    } catch (e) {
+      el.textContent = 'unreachable';
+      el.style.color = 'var(--muted)';
+    }
+  }
+
+  async function pollMod3() {
+    const el = document.getElementById('ops-mod3-status');
+    if (!el) return;
+    try {
+      const r = await fetch(MOD3_HEALTH_URL, { signal: AbortSignal.timeout(2500) });
+      if (r.ok) {
+        const d = await r.json();
+        const q = d.queue ? `q:${d.queue.depth}` : '';
+        el.textContent = `${d.status || 'ok'} ${q}`.trim();
+        el.style.color = d.status === 'ok' ? 'var(--accent)' : 'var(--red)';
+      } else {
+        el.textContent = `HTTP ${r.status}`;
+        el.style.color = 'var(--red)';
+      }
+    } catch (e) {
+      el.textContent = 'unreachable';
+      el.style.color = 'var(--muted)';
+    }
+  }
+
+  async function pollSeats() {
+    const el = document.getElementById('ops-seats');
+    if (!el) return;
+    try {
+      const r = await fetch(SEATS_URL_FN(), { signal: AbortSignal.timeout(2500) });
+      if (r.ok) {
+        const d = await r.json();
+        const seats = Array.isArray(d.seats) ? d.seats : [];
+        el.textContent = String(seats.length);
+        el.style.color = seats.length > 0 ? 'var(--accent)' : 'var(--muted)';
+      } else {
+        el.textContent = '?';
+        el.style.color = 'var(--muted)';
+      }
+    } catch (e) {
+      el.textContent = '?';
+      el.style.color = 'var(--muted)';
+    }
+  }
+
+  async function refreshAll() {
+    await Promise.all([pollKernel(), pollMod3(), pollSeats()]);
+  }
+
+  // Poll when the panel is open; stop when closed.
+  let _opsInterval = null;
+  const opsPanel = document.getElementById('ops-panel');
+  if (opsPanel) {
+    opsPanel.addEventListener('toggle', () => {
+      if (opsPanel.open) {
+        refreshAll();
+        _opsInterval = setInterval(refreshAll, 5000);
+      } else {
+        clearInterval(_opsInterval);
+        _opsInterval = null;
+      }
+    });
+  }
+
+  // Expose addEvent so the WS handler can push channel events here.
+  window.__mod3OpsEvent = addEvent;
+})();
 
 // --- Settings persistence (localStorage) ---
 // All keys in one place so Reset can clear them atomically.
