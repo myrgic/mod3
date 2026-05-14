@@ -33,7 +33,6 @@ from typing import Optional
 from fastapi import FastAPI, Request, Response, UploadFile, WebSocket
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
 
 from _version import __version__
 from audio_subscribers import get_default_audio_subscribers
@@ -42,6 +41,15 @@ from engine import MODELS, generate_audio, get_loaded_engines
 from modality import EncodedOutput, ModalityType
 from modules.text import TextModule
 from modules.voice import VoiceModule
+from schemas.http import (
+    BusActRequest,
+    RegisterProfileRequest,
+    SessionRegisterRequest,
+    ShutdownRequest,
+    SpeechRequest,
+    SynthesizeRequest,
+    VadFilterRequest,
+)
 from session_registry import (
     get_default_registry,
     resolve_output_device,
@@ -262,65 +270,9 @@ def encode_wav(samples, sample_rate: int) -> bytes:
 
 
 # ---------------------------------------------------------------------------
-# Request / Response models
-# ---------------------------------------------------------------------------
-
-
-class SynthesizeRequest(BaseModel):
-    text: str
-    voice: str = Field(default="bm_lewis")
-    speed: float = Field(default=1.25)
-    emotion: float = Field(default=0.5)
-    format: str = Field(default="wav", pattern="^(wav|pcm)$")
-    # ADR-082 Phase 1: optional session routing. When present, the
-    # session's assigned_voice overrides ``voice`` (unless an explicit
-    # non-default was passed), and the session is advanced in the global
-    # serializer's round-robin.
-    session_id: str | None = Field(default=None)
-    # Path to a reference WAV for zero-shot voice cloning. Honored by the
-    # chatterbox engine (24kHz, mono). Other engines ignore it.
-    ref_audio: str | None = Field(default=None)
-
-
-class SpeechRequest(BaseModel):
-    """OpenAI-compatible TTS request."""
-
-    model: str = Field(default="kokoro")
-    input: str
-    voice: str = Field(default="af_heart")
-    response_format: str = Field(default="mp3")
-    speed: float = Field(default=1.0)
-    # ADR-082 Phase 1 extension — not part of the OpenAI schema but harmless
-    # to accept. When absent, behavior is identical to before Phase 1.
-    session_id: str | None = Field(default=None)
-
-
-class ShutdownRequest(BaseModel):
-    """Graceful shutdown request from the kernel."""
-
-    timeout_sec: float = Field(default=5.0, ge=0, le=60)
-    reason: str = Field(default="shutdown-requested")
-
-
-class SessionRegisterRequest(BaseModel):
-    """Register a session with the Mod3 communication bus (ADR-082)."""
-
-    session_id: str
-    participant_id: str
-    participant_type: str = Field(default="agent")
-    preferred_voice: str | None = Field(default=None)
-    preferred_output_device: str = Field(default="system-default")
-    priority: int = Field(default=0)
-
-
-class RegisterProfileRequest(BaseModel):
-    """Register a new voice profile from a reference audio file path."""
-
-    name: str
-    engine: str
-    ref_audio_path: str
-    ref_text: str | None = Field(default=None)
-    exaggeration: float = Field(default=0.5)
+# Request / Response models — imported from schemas.http
+# (SynthesizeRequest, SpeechRequest, ShutdownRequest, SessionRegisterRequest,
+#  RegisterProfileRequest, BusActRequest, VadFilterRequest)
 
 
 # ---------------------------------------------------------------------------
@@ -700,16 +652,15 @@ async def vad_check(file: UploadFile):
 
 
 @app.post("/v1/filter")
-async def filter_transcription(req: dict):
+async def filter_transcription(req: VadFilterRequest):
     """Check if a transcription is a known Whisper hallucination.
 
     Body: {"text": "thank you"}
     Returns: {"is_hallucination": true, "text": "thank you"}
     """
-    text = req.get("text", "")
     return {
-        "is_hallucination": is_hallucination(text),
-        "text": text,
+        "is_hallucination": is_hallucination(req.text),
+        "text": req.text,
     }
 
 
@@ -1207,7 +1158,7 @@ async def bus_perceive(file: UploadFile, modality: str = "voice", channel: str =
 
 
 @app.post("/v1/bus/act")
-def bus_act(req: dict):
+def bus_act(req: BusActRequest):
     """Route a cognitive intent through the bus: resolve modality → encode → queue.
 
     Body: {"content": "hello world", "modality": "voice", "channel": "discord-voice",
@@ -1215,13 +1166,14 @@ def bus_act(req: dict):
     """
     from modality import CognitiveIntent, ModalityType
 
-    content = req.get("content", "")
-    modality = req.get("modality")
-    channel = req.get("channel", "")
+    content = req.content
+    modality = req.modality
+    channel = req.channel
     metadata = {}
     for k in ("voice", "speed", "emotion"):
-        if k in req:
-            metadata[k] = req[k]
+        v = getattr(req, k, None)
+        if v is not None:
+            metadata[k] = v
 
     intent = CognitiveIntent(
         modality=ModalityType(modality) if modality else None,
