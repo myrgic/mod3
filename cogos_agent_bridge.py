@@ -45,7 +45,7 @@ from typing import Optional
 
 import httpx
 
-from bus_bridge import KernelBusSubscriber, default_stream_url
+from bus_bridge import KernelBusSubscriber
 from channels import BrowserChannel
 
 logger = logging.getLogger("mod3.cogos_agent")
