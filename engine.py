@@ -207,9 +207,7 @@ def generate_audio(
     if engine is None:
         engine, voice = resolve_model(voice)
     elif engine not in MODELS:
-        raise ValueError(
-            f"unknown engine: {engine!r} (available: {sorted(MODELS.keys())})"
-        )
+        raise ValueError(f"unknown engine: {engine!r} (available: {sorted(MODELS.keys())})")
     model = get_model(engine)
     sample_rate = model.sample_rate
     sentences = split_sentences(text)

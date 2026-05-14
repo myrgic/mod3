@@ -290,9 +290,7 @@ class TestOperationSchemas:
     def test_operation_round_trip_through_wire(self):
         """Operations must serialise cleanly into a WireMessage envelope."""
         op = TTSSynthesizeRequest(text="hello", voice="bm_lewis", speed=1.25)
-        msg = WireMessage(
-            id="x", type="request", module="tts", op="synthesize", data=op.model_dump()
-        )
+        msg = WireMessage(id="x", type="request", module="tts", op="synthesize", data=op.model_dump())
         line = msg.to_jsonl()
         parsed = WireMessage.model_validate_json(line)
         reconstructed = TTSSynthesizeRequest(**parsed.data)

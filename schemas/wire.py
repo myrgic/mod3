@@ -47,9 +47,7 @@ class WireMessage(BaseModel):
     id: str = Field(..., description="request/response correlation ID")
     type: WireType
     ts: str = Field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat(
-            timespec="microseconds"
-        ),
+        default_factory=lambda: datetime.now(timezone.utc).isoformat(timespec="microseconds"),
         description="RFC3339Nano timestamp",
     )
 
@@ -62,21 +60,15 @@ class WireMessage(BaseModel):
     result: dict[str, Any] | None = None
 
     # ---- streaming fields (reserved for chunked responses/events) ----
-    chunk: int | None = Field(
-        default=None, description="0-based chunk index within a streamed response"
-    )
-    done: bool | None = Field(
-        default=None, description="terminal chunk marker for streamed responses"
-    )
+    chunk: int | None = Field(default=None, description="0-based chunk index within a streamed response")
+    done: bool | None = Field(default=None, description="terminal chunk marker for streamed responses")
 
     # ---- command fields ----
     command: str | None = Field(default=None, description="lifecycle command verb")
 
     # ---- event fields ----
     event: str | None = Field(default=None, description="event name (e.g. 'ready')")
-    status: str | None = Field(
-        default=None, description="event status payload (e.g. 'ok')"
-    )
+    status: str | None = Field(default=None, description="event status payload (e.g. 'ok')")
 
     # ---- error fields ----
     error: str | None = None

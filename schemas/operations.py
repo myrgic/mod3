@@ -67,9 +67,7 @@ class STTTranscribeResponse(_Op):
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     language: str = "en"
     duration_sec: float = 0.0
-    stt_ms: float = Field(
-        default=0.0, description="wall-clock time spent in transcription"
-    )
+    stt_ms: float = Field(default=0.0, description="wall-clock time spent in transcription")
 
 
 # ---------------------------------------------------------------------------
@@ -93,9 +91,7 @@ class STTStreamingResponse(_Op):
     tier: str
     elapsed_ms: float = 0.0
     changed: bool = False
-    filtered: bool = Field(
-        default=False, description="suppressed (silence/hallucination)"
-    )
+    filtered: bool = Field(default=False, description="suppressed (silence/hallucination)")
 
 
 # ---------------------------------------------------------------------------

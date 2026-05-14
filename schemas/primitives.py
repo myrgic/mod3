@@ -39,9 +39,7 @@ class AudioChunk(BaseModel):
         default=None,
         description="raw float32 samples as bytes (internal engine format)",
     )
-    samples_int16: bytes | None = Field(
-        default=None, description="raw int16 PCM (wire format)"
-    )
+    samples_int16: bytes | None = Field(default=None, description="raw int16 PCM (wire format)")
 
     # Geometry
     sample_rate: int = 24000

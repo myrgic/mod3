@@ -33,8 +33,7 @@ try:
     from pipecat.services.tts_service import TTSService
 except ImportError as _pipecat_err:
     raise ImportError(
-        "pipecat-ai is required for Mod3TTSService. "
-        "Install it with: pip install mod3[pipecat]"
+        "pipecat-ai is required for Mod3TTSService. Install it with: pip install mod3[pipecat]"
     ) from _pipecat_err
 
 # Module-level reference so tests can patch via:
@@ -98,9 +97,7 @@ class Mod3TTSService(TTSService):
     # TTSService contract
     # ------------------------------------------------------------------
 
-    async def run_tts(
-        self, text: str
-    ) -> AsyncGenerator[TTSAudioRawFrame | TTSStartedFrame | TTSStoppedFrame, None]:
+    async def run_tts(self, text: str) -> AsyncGenerator[TTSAudioRawFrame | TTSStartedFrame | TTSStoppedFrame, None]:
         """Synthesize ``text`` and yield Pipecat audio frames.
 
         Yields a ``TTSStartedFrame``, one ``TTSAudioRawFrame`` per engine
