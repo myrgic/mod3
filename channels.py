@@ -63,6 +63,14 @@ logger = logging.getLogger("mod3.channels")
 # Channel-mode helpers
 # ---------------------------------------------------------------------------
 
+_LOCALHOST_ADDRS = frozenset({"127.0.0.1", "::1", "localhost", "0:0:0:0:0:0:0:1"})
+
+
+def access_is_localhost_fallback(host: str) -> bool:
+    """Fallback localhost check used when access.py is unavailable."""
+    return host.strip() in _LOCALHOST_ADDRS
+
+
 def _is_channel_mode() -> bool:
     """Return True when mod3 is acting as a Claude Code Channel.
 
@@ -291,6 +299,20 @@ class BrowserChannel:
             await self._send_error("invalid_frame", f"unrecognised frame type: {msg_type!r}")
             return
 
+        # Access gating: check before processing any inbound frame.
+        # Config frames (voice/model/speed settings) are allowed through regardless —
+        # they carry no message content and are safe to process from any client.
+        if not isinstance(frame, ConfigFrame):
+            if not self._check_access():
+                # is_allowed returned False; _check_access has already handled
+                # pairing-request emission for unknown non-localhost clients.
+                await self._send_error(
+                    "access_denied",
+                    "Connection not authorised. For remote clients, complete pairing via "
+                    "/mod3:access pair <code> in your Claude Code terminal.",
+                )
+                return
+
         try:
             if isinstance(frame, EndOfSpeechFrame):
                 await self._process_utterance()
@@ -310,6 +332,83 @@ class BrowserChannel:
         except Exception as exc:  # noqa: BLE001
             logger.error("handler error for frame type=%r: %s", msg_type, exc)
             await self._send_error("handler_error", str(exc))
+
+    # ------------------------------------------------------------------
+    # Access gating
+    # ------------------------------------------------------------------
+
+    def _check_access(self) -> bool:
+        """Return True if this connection is permitted to use the channel.
+
+        For localhost connections (self._client_host in loopback addrs),
+        access is always granted.  For non-localhost connections, the
+        access.json allowlist is consulted.  When a non-localhost client
+        is unknown, a pairing request is emitted as a channel notification
+        so the operator can approve via /mod3:access pair <code>.
+
+        This method is synchronous; it schedules the async pairing
+        notification via asyncio.ensure_future (must be called from the
+        event loop thread).
+        """
+        # Defer import to avoid circular dependency at module level.
+        try:
+            import access  # noqa: PLC0415
+        except ImportError:
+            # access.py not available — fail open for localhost, closed for remote
+            logger.warning("access.py not found; localhost-only gating active")
+            return access_is_localhost_fallback(self._client_host)
+
+        # channel_mode check: gating only applies in claude-code mode.
+        # In local-agent mode all connections are trusted (same machine).
+        if not _is_channel_mode():
+            return True
+
+        host = self._client_host
+        localhost = access.is_localhost(host)
+
+        if localhost:
+            return True
+
+        # Use channel_id as the stable identifier for this WebSocket session.
+        # For a real device-UUID pairing model the client would send the UUID
+        # in a WS sub-protocol or initial handshake; using channel_id is a safe
+        # fallback for the current dashboard-only deployment.
+        identifier = self.channel_id
+
+        if access.is_allowed(identifier, host):
+            return True
+
+        # Unknown remote client — emit a pairing request and deny for now.
+        # The operator approves via /mod3:access pair <code>.
+        try:
+            code = access.add_pending(identifier)
+            asyncio.ensure_future(self._emit_pairing_request(code, identifier))
+            logger.info("pairing request emitted: code=%s identifier=%s host=%s", code, identifier, host)
+        except Exception:
+            logger.exception("failed to emit pairing request for identifier=%s", identifier)
+
+        return False
+
+    async def _emit_pairing_request(self, code: str, identifier: str) -> None:
+        """Emit a pairing_request channel notification to Claude Code."""
+        try:
+            from server import emit_channel_event  # noqa: PLC0415
+
+            await emit_channel_event(
+                content=(
+                    f"Pairing request from identifier {identifier!r}. "
+                    f"Run `/mod3:access pair {code}` in your Claude Code terminal to approve."
+                ),
+                meta={
+                    "pairing_request": "true",
+                    "identifier": identifier,
+                    "code": code,
+                },
+            )
+        except RuntimeError as exc:
+            logger.warning("pairing request emit failed (MCP session inactive?): %s", exc)
+        except Exception:
+            logger.exception("unexpected error emitting pairing request")
 
     # ------------------------------------------------------------------
     # Three-Tier STT
