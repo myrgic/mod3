@@ -753,11 +753,28 @@ function finalizeAssistant(suffix) {
 }
 
 async function sendTextMessage(text) {
+  appendMessage('user', text, 'text');
+
+  // ACP path (default): use the ACP transport unless ?legacy=1 is in the URL.
+  const useLegacy = new URLSearchParams(window.location.search).get('legacy') === '1';
+  if (!useLegacy && window._acpTransport) {
+    try {
+      const acpT = window._acpTransport;
+      if (!acpT.connected) {
+        appendMessage('assistant', 'ACP transport not connected. Falling back to /ws/chat...', 'system');
+      } else {
+        await acpT.sessionPrompt(text);
+        return;
+      }
+    } catch (err) {
+      console.error('[ACP] sessionPrompt failed, falling back to legacy:', err);
+    }
+  }
+
+  // Legacy /ws/chat fallback path (always available when ?legacy=1 or ACP unavailable).
   if (_transport && _transport.connected) {
     _transport.sendControl({ type: "text_message", text: text });
-    appendMessage('user', text, 'text');
   } else {
-    appendMessage('user', text, 'text');
     appendMessage('assistant', 'Not connected to server. Reconnecting...', 'system');
   }
 }
@@ -1203,6 +1220,7 @@ chatInput.addEventListener('input', () => {
 <script src="/dashboard/vad/bundle.min.js"></script>
 <script src="/dashboard/playback.js?v=2"></script>
 <script src="/dashboard/transport.js?v=2"></script>
+<script src="/dashboard/acp-transport.js?v=1"></script>
 <script src="/dashboard/trace.js?v=1" defer></script>
 
 <script>
@@ -1375,7 +1393,76 @@ chatInput.addEventListener('input', () => {
 
 <script>
 /**
- * Voice chat integration — uses the global chat area for messages,
+ * ACP transport initialization.
+ *
+ * Creates an AcpTransport connected to /ws/acp and stores it at
+ * window._acpTransport. sendTextMessage() checks this variable to determine
+ * which transport path to use (ACP default; ?legacy=1 for /ws/chat fallback).
+ *
+ * The transport auto-reconnects with exponential backoff. Streaming
+ * agent_message_chunk notifications feed the same appendAssistantChunk()
+ * renderer used by the /ws/chat path, so the chat UI is transport-agnostic.
+ */
+(function setupAcpTransport() {
+  const useLegacy = new URLSearchParams(window.location.search).get('legacy') === '1';
+  if (useLegacy) {
+    console.log('[ACP] Legacy mode (?legacy=1) -- ACP transport disabled');
+    return;
+  }
+
+  const scheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const acpUrl = `${scheme}//${window.location.host}/ws/acp`;
+  let reconnectDelay = 1500;
+  let acpTransport = null;
+
+  async function connectAcp() {
+    try {
+      acpTransport = new AcpTransport(acpUrl);
+
+      acpTransport.onAgentChunk = (text) => {
+        appendAssistantChunk(text);
+      };
+
+      acpTransport.onResponseComplete = () => {
+        finalizeAssistant();
+      };
+
+      acpTransport.onError = (msg) => {
+        console.warn('[ACP] Error:', msg);
+      };
+
+      acpTransport.onClose = () => {
+        window._acpTransport = null;
+        console.log('[ACP] Closed, reconnecting in', reconnectDelay + 'ms');
+        setTimeout(async () => {
+          try { await connectAcp(); } catch {}
+        }, reconnectDelay);
+        reconnectDelay = Math.min(reconnectDelay * 2, 30000);
+      };
+
+      await acpTransport.connect(acpUrl);
+      await acpTransport.initialize();
+      await acpTransport.sessionNew();
+      window._acpTransport = acpTransport;
+      reconnectDelay = 1500;
+      console.log('[ACP] Ready, session:', acpTransport._sessionId);
+    } catch (err) {
+      console.warn('[ACP] Connect/init failed (mod3 may not have /ws/acp yet):', err);
+      window._acpTransport = null;
+      setTimeout(async () => {
+        try { await connectAcp(); } catch {}
+      }, reconnectDelay);
+      reconnectDelay = Math.min(reconnectDelay * 2, 30000);
+    }
+  }
+
+  connectAcp();
+})();
+</script>
+
+<script>
+/**
+ * Voice chat integration -- uses the global chat area for messages,
  * keeps AudioCapture + VoiceTransport + AudioPlayback modules intact.
  */
 (function() {
