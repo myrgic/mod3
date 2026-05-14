@@ -109,16 +109,18 @@ def _handle_synthesize(request_id: str, data: dict) -> WireMessage:
 
     req = TTSSynthesizeRequest.model_validate(data)
 
-    t0 = time.perf_counter()
-    chunks = list(
-        _gen(
-            req.text,
-            voice=req.voice,
-            speed=req.speed,
-            emotion=req.emotion if req.emotion is not None else 0.5,
-            stream=False,
-        )
+    # Forward the optional engine override; same shape as the streaming path.
+    gen_kwargs: dict[str, object] = dict(
+        voice=req.voice,
+        speed=req.speed,
+        emotion=req.emotion if req.emotion is not None else 0.5,
+        stream=False,
     )
+    if req.engine:
+        gen_kwargs["engine"] = req.engine
+
+    t0 = time.perf_counter()
+    chunks = list(_gen(req.text, **gen_kwargs))
     gen_time = time.perf_counter() - t0
 
     if not chunks:
@@ -167,17 +169,24 @@ def _handle_stream(request_id: str, data: dict) -> Iterator[WireMessage]:
 
     req = TTSStreamRequest.model_validate(data)
 
-    chunk_index = 0
-    sentence_index = 0
-
-    for audio_chunk in _gen(
-        req.text,
+    # Forward the optional engine override. ``engine.generate_audio`` skips
+    # ``resolve_model`` when this kwarg is non-None and trusts the caller's
+    # selection. The mock path also accepts the kwarg.
+    gen_kwargs: dict[str, object] = dict(
         voice=req.voice,
         speed=req.speed,
         emotion=req.emotion if req.emotion is not None else 0.5,
         stream=True,
         streaming_interval=req.streaming_interval if req.streaming_interval > 0 else 1.0,
-    ):
+    )
+    if req.engine:
+        gen_kwargs["engine"] = req.engine
+
+    chunk_index = 0
+    sentence_index = 0
+    last_done = False  # tracks whether the last emitted chunk had is_final=True
+
+    for audio_chunk in _gen(req.text, **gen_kwargs):
         meta = audio_chunk.metadata
         is_final = bool(meta.get("is_final", False))
         current_sentence = int(meta.get("sentence", sentence_index))
@@ -219,11 +228,13 @@ def _handle_stream(request_id: str, data: dict) -> Iterator[WireMessage]:
         )
         chunk_index += 1
         sentence_index = current_sentence
+        last_done = is_final
 
-    # Emit a final done sentinel if the last chunk wasn't marked is_final
-    # (handles engines that don't set is_final on the last chunk)
-    if chunk_index > 0:
-        # Check if last emitted was already done — emit a terminal marker
+    # Only emit a terminal-marker sentinel when the engine did NOT already
+    # mark its last chunk is_final=True. Engines that set is_final on the
+    # last real chunk (the normal case) don't get a duplicate empty frame —
+    # consumers see exactly one done=True event per request.
+    if chunk_index > 0 and not last_done:
         yield WireMessage(
             id=request_id,
             type="event",

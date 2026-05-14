@@ -190,14 +190,26 @@ def generate_audio(
     stream: bool = True,
     streaming_interval: float = 1.0,
     ref_audio: str | None = None,
+    engine: str | None = None,
 ) -> Iterator[AudioChunk]:
     """Yield AudioChunks for the given text. Core generation pipeline.
 
     ref_audio is a path to a reference WAV for zero-shot voice cloning.
     Currently honored only on the chatterbox engine, which clones the
     reference speaker via prepare_conditionals → generate(audio_prompt=...).
+
+    engine is an optional override for voice-driven engine resolution.
+    When None (default), the voice name determines the engine via
+    resolve_model. When set, that engine is used directly and the voice
+    is passed through unchanged; useful for pinning a specific backend
+    without renaming the voice.
     """
-    engine, voice = resolve_model(voice)
+    if engine is None:
+        engine, voice = resolve_model(voice)
+    elif engine not in MODELS:
+        raise ValueError(
+            f"unknown engine: {engine!r} (available: {sorted(MODELS.keys())})"
+        )
     model = get_model(engine)
     sample_rate = model.sample_rate
     sentences = split_sentences(text)
