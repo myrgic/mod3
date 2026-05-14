@@ -204,15 +204,14 @@ def add_pending(identifier: str) -> str:
                 break
 
         # Prune expired entries and append new one
-        data["pending"] = [
-            e for e in pending
-            if _entry_not_expired(e, now)
-        ]
-        data["pending"].append({
-            "code": code,
-            "identifier": identifier,
-            "expires_at": expire_at.isoformat(),
-        })
+        data["pending"] = [e for e in pending if _entry_not_expired(e, now)]
+        data["pending"].append(
+            {
+                "code": code,
+                "identifier": identifier,
+                "expires_at": expire_at.isoformat(),
+            }
+        )
         _save(data)
 
     logger.info("pairing pending: code=%s identifier=%s expires=%s", code, identifier, expire_at.isoformat())

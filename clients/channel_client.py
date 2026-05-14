@@ -202,9 +202,9 @@ class ChannelClient:
                     data_lines: list[str] = []
                     async for line in resp.aiter_lines():
                         if line.startswith("event:"):
-                            event_type = line[len("event:"):].strip()
+                            event_type = line[len("event:") :].strip()
                         elif line.startswith("data:"):
-                            data_lines.append(line[len("data:"):].strip())
+                            data_lines.append(line[len("data:") :].strip())
                         elif line == "":
                             # End of SSE event — process it
                             if data_lines:

@@ -152,11 +152,7 @@ class SeatRegistry:
     def fan_out_all(self, event: dict[str, Any]) -> int:
         """Broadcast *event* to ALL seats across all sessions."""
         with self._lock:
-            all_seats = [
-                seat
-                for session_seats in self._seats.values()
-                for seat in session_seats.values()
-            ]
+            all_seats = [seat for session_seats in self._seats.values() for seat in session_seats.values()]
         for seat in all_seats:
             _enqueue_nowait(seat, event)
         return len(all_seats)
