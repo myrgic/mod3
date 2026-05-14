@@ -17,7 +17,8 @@ HTTP endpoints (wired in http_api.py):
   GET    /v1/sessions/{session_id}/seats/{seat_id}/events  (SSE)
   POST   /v1/sessions/{session_id}/messages               (dashboard fan-out)
 
-Fan-out policy (v0): broadcast to all seats in the session.
+Fan-out policy (v1): broadcast to all seats in the session, optionally
+skipping the originating seat to prevent echo loops.
 """
 
 from __future__ import annotations
@@ -134,8 +135,20 @@ class SeatRegistry:
     # Fan-out
     # ------------------------------------------------------------------
 
-    def fan_out(self, session_id: str, event: dict[str, Any]) -> int:
+    def fan_out(
+        self,
+        session_id: str,
+        event: dict[str, Any],
+        exclude_seat: str | None = None,
+    ) -> int:
         """Broadcast *event* to all seats attached to *session_id*.
+
+        Args:
+            session_id: Target session.
+            event: Event dict to enqueue on each seat's SSE queue.
+            exclude_seat: Optional seat_id to skip.  Pass the originating
+                seat so it does not receive its own outbound message back
+                (prevents dashboard-chat echo loops).
 
         Returns the number of seats that received the event.
         """
@@ -143,19 +156,32 @@ class SeatRegistry:
             seats = list(self._seats.get(session_id, {}).values())
         count = 0
         for seat in seats:
+            if exclude_seat and seat.seat_id == exclude_seat:
+                logger.debug("Fan-out skipping originating seat %s (echo suppression)", exclude_seat)
+                continue
             _enqueue_nowait(seat, event)
             count += 1
         if count:
             logger.debug("Fan-out to %d seats in session %s: type=%s", count, session_id, event.get("type"))
         return count
 
-    def fan_out_all(self, event: dict[str, Any]) -> int:
-        """Broadcast *event* to ALL seats across all sessions."""
+    def fan_out_all(self, event: dict[str, Any], exclude_seat: str | None = None) -> int:
+        """Broadcast *event* to ALL seats across all sessions.
+
+        Args:
+            event: Event dict to enqueue.
+            exclude_seat: Optional seat_id to skip across all sessions.
+        """
         with self._lock:
             all_seats = [seat for session_seats in self._seats.values() for seat in session_seats.values()]
+        count = 0
         for seat in all_seats:
+            if exclude_seat and seat.seat_id == exclude_seat:
+                logger.debug("Fan-out-all skipping originating seat %s (echo suppression)", exclude_seat)
+                continue
             _enqueue_nowait(seat, event)
-        return len(all_seats)
+            count += 1
+        return count
 
 
 def _enqueue_nowait(seat: Seat, event: dict[str, Any]) -> None:
