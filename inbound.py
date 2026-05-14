@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 import threading
 import time
@@ -44,6 +45,12 @@ class InboundPipeline:
     emit_channel_event() to send notifications to Claude Code.
     """
 
+    # Default silence threshold for utterance endpointing.
+    # Override per-session via MOD3_VAD_SILENCE_MS (e.g. MOD3_VAD_SILENCE_MS=700).
+    # 600ms is the sweet spot: long enough for mid-sentence pauses, short enough
+    # that the user doesn't feel lag at turn-end.
+    _DEFAULT_SILENCE_MS: int = 600
+
     def __init__(
         self,
         bus: ModalityBus,
@@ -53,7 +60,7 @@ class InboundPipeline:
         vad_threshold: float = 0.5,
         speaker: str = "user",
         sample_rate: int = 16000,
-        min_silence_duration_sec: float = 0.5,
+        min_silence_duration_sec: float | None = None,
         loop_sleep_sec: float = 0.05,
         bargein_registry=None,
     ):
@@ -64,7 +71,25 @@ class InboundPipeline:
         self._vad_threshold = vad_threshold
         self._speaker = speaker
         self._sample_rate = sample_rate
-        self._min_silence_sec = min_silence_duration_sec
+        # Resolve silence duration: caller > env var > class default (600ms).
+        # MOD3_VAD_SILENCE_MS is in milliseconds; stored internally as seconds.
+        if min_silence_duration_sec is not None:
+            self._min_silence_sec = min_silence_duration_sec
+        else:
+            env_ms_raw = os.environ.get("MOD3_VAD_SILENCE_MS", "").strip()
+            if env_ms_raw:
+                try:
+                    self._min_silence_sec = int(env_ms_raw) / 1000.0
+                except ValueError:
+                    logger.warning(
+                        "MOD3_VAD_SILENCE_MS=%r is not an integer; using default %dms",
+                        env_ms_raw,
+                        self._DEFAULT_SILENCE_MS,
+                    )
+                    self._min_silence_sec = self._DEFAULT_SILENCE_MS / 1000.0
+            else:
+                self._min_silence_sec = self._DEFAULT_SILENCE_MS / 1000.0
+        logger.debug("VAD silence threshold: %.3fs", self._min_silence_sec)
         self._loop_sleep_sec = loop_sleep_sec
         # Optional BargeinRegistry — when provided, VAD trigger dispatches a
         # ``user_speaking_start`` event directly (in addition to the
