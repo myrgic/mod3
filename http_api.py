@@ -1092,7 +1092,8 @@ async def session_message(session_id: str, request: Request):
       {
         "content": "<text>",
         "input_type": "text" | "voice",
-        "role": "user"
+        "role": "user",
+        "seat_id": "<originating-seat-id>"   (optional — skipped in fan-out to prevent echo)
       }
 
     Returns the number of seats that received the event.
@@ -1107,6 +1108,7 @@ async def session_message(session_id: str, request: Request):
     content = body.get("content", "")
     input_type = body.get("input_type", "text")
     role = body.get("role", "user")
+    originating_seat = body.get("seat_id") or None
 
     registry = get_seat_registry()
     count = registry.fan_out(
@@ -1117,6 +1119,7 @@ async def session_message(session_id: str, request: Request):
             "input_type": input_type,
             "role": role,
         },
+        exclude_seat=originating_seat,
     )
     return {"status": "ok", "session_id": session_id, "seats_notified": count}
 
@@ -1145,6 +1148,10 @@ async def dashboard_chat_post(request: Request):
     text = body.get("text", "")
     role = body.get("role", "assistant")
     session_id = body.get("session_id")
+    # seat_id identifies the channel-client that sent this message; exclude it
+    # from the fan-out so the originator does not receive its own broadcast back
+    # and trigger an echo loop.
+    originating_seat = body.get("seat_id") or None
 
     # Fan to WebSocket dashboard-chat subscribers (existing server.py mechanism)
     try:
@@ -1154,7 +1161,7 @@ async def dashboard_chat_post(request: Request):
     except (ImportError, AttributeError):
         logger.debug("_dashboard_chat_broadcast not available (server.py not loaded or renamed)")
 
-    # Also fan to any seat SSE streams in the session
+    # Also fan to any seat SSE streams in the session, skipping the sender.
     if session_id:
         from seats import get_seat_registry
 
@@ -1167,6 +1174,7 @@ async def dashboard_chat_post(request: Request):
                 "role": role,
                 "session_id": session_id,
             },
+            exclude_seat=originating_seat,
         )
 
     return {"status": "ok"}
