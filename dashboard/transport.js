@@ -1,11 +1,21 @@
 /**
  * WebSocket transport for voice chat.
  * Binary frames = audio, text frames = JSON control messages.
+ *
+ * Supported handler keys:
+ *   onAudio, onTranscript, onPartialTranscript, onResponseText,
+ *   onResponseComplete, onInterrupted, onDraftQueue, onError,
+ *   onOpen, onClose
+ *
+ * Note: tts_progress and standalone metrics handlers were removed (no
+ * server-side producer). The error handler now receives structured
+ * { type: "error", error: { code, message, data? } } frames from the
+ * server rather than raw WebSocket error events.
  */
 class VoiceTransport {
   constructor(url, handlers) {
     this.url = url;
-    this.handlers = handlers; // { onAudio, onTranscript, onResponseText, onResponseComplete, onInterrupted, onMetrics, onError, onOpen, onClose }
+    this.handlers = handlers; // { onAudio, onTranscript, onPartialTranscript, onResponseText, onResponseComplete, onInterrupted, onDraftQueue, onError, onOpen, onClose }
     this.ws = null;
     this.reconnectAttempts = 0;
     this.maxReconnects = 3;
@@ -67,20 +77,24 @@ class VoiceTransport {
       const bytes = new Uint8Array(binary.length);
       for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
       if (this.handlers.onAudio) this.handlers.onAudio(bytes.buffer);
-      if (this.handlers.onMetrics) this.handlers.onMetrics(msg);
       return;
     }
 
+    // Structured error frame from the server — { type: "error", error: { code, message, data? } }
+    if (msg.type === "error") {
+      console.error("[WS] Server error frame:", msg.error);
+      if (this.handlers.onError) this.handlers.onError(msg);
+      return;
+    }
+
+    // tts_progress and standalone metrics removed (no server-side producer)
     const handlerMap = {
       transcript: "onTranscript",
       partial_transcript: "onPartialTranscript",
       response_text: "onResponseText",
       response_complete: "onResponseComplete",
       interrupted: "onInterrupted",
-      tts_progress: "onTtsProgress",
       draft_queue: "onDraftQueue",
-      metrics: "onMetrics",
-      error: "onError",
     };
     const handler = handlerMap[msg.type];
     if (handler && this.handlers[handler]) {
