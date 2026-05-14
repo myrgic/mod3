@@ -1568,7 +1568,6 @@ async def ws_acp(websocket: WebSocket):
         PromptCapabilities,
         SessionNewResult,
         SessionPromptResult,
-        SessionUpdateNotification,
     )
 
     await websocket.accept()
