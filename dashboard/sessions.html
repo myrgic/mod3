@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mod³ Sessions</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff;
+    --green: #3fb950; --orange: #d29922; --red: #f85149;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, system-ui, sans-serif; background: var(--bg); color: var(--text); line-height: 1.5; min-height: 100vh; display: flex; flex-direction: column; }
+
+  /* Header bar (identical to index.html) */
+  .header {
+    display: flex; align-items: center; gap: 16px;
+    padding: 12px 24px; border-bottom: 1px solid var(--border);
+    background: var(--surface); flex-shrink: 0;
+  }
+  .header h1 { font-size: 1.2rem; margin-right: auto; }
+  .header h1 .sub { color: var(--muted); font-weight: 400; font-size: 0.95rem; margin-left: 8px; }
+  .tabs { display: flex; gap: 4px; margin-right: 16px; }
+  .tab {
+    padding: 6px 12px; text-decoration: none;
+    color: var(--muted); font-size: 0.85rem;
+    border: 1px solid transparent; border-radius: 4px;
+    transition: color 0.15s, background 0.15s, border-color 0.15s;
+  }
+  .tab:hover { color: var(--text); background: var(--bg); }
+  .tab.active { color: var(--accent); border-color: var(--accent); background: var(--surface); }
+
+  /* Main layout */
+  .main { flex: 1; max-width: 960px; width: 100%; margin: 0 auto; padding: 24px; }
+
+  /* Breadcrumb */
+  .breadcrumb {
+    font-size: 0.8rem; color: var(--muted); margin-bottom: 20px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .breadcrumb a { color: var(--accent); text-decoration: none; }
+  .breadcrumb a:hover { text-decoration: underline; }
+
+  /* Section header row */
+  .section-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 12px;
+  }
+  .section-title { font-size: 0.9rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+
+  /* Project grid */
+  .project-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 12px;
+    margin-bottom: 32px;
+  }
+  .project-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 14px 16px; cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .project-card:hover { border-color: var(--accent); background: #1a2030; }
+  .project-card.selected { border-color: var(--accent); background: #1a2030; }
+  .project-name {
+    font-size: 0.85rem; font-weight: 600; color: var(--text);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    word-break: break-all; margin-bottom: 4px;
+  }
+  .project-meta { font-size: 0.72rem; color: var(--muted); display: flex; gap: 10px; }
+  .project-meta span { display: flex; align-items: center; gap: 3px; }
+
+  /* Session list */
+  .session-list { display: flex; flex-direction: column; gap: 8px; }
+  .session-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 14px 16px;
+    display: flex; align-items: flex-start; gap: 14px;
+  }
+  .session-card:hover { border-color: var(--border); } /* no hover state needed — button has it */
+  .session-info { flex: 1; min-width: 0; }
+  .session-id {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.75rem; color: var(--accent); margin-bottom: 4px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .session-preview {
+    font-size: 0.85rem; color: var(--text); margin-bottom: 6px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .session-preview.empty { color: var(--muted); font-style: italic; }
+  .session-meta { font-size: 0.72rem; color: var(--muted); display: flex; gap: 10px; flex-wrap: wrap; }
+
+  /* Action buttons */
+  .session-actions { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
+  button.action {
+    background: none; border: 1px solid var(--border); border-radius: 6px;
+    padding: 6px 14px; color: var(--muted); cursor: pointer;
+    font-size: 0.78rem; font-family: inherit; white-space: nowrap;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+  }
+  button.action:hover { color: var(--text); border-color: var(--accent); }
+  button.action.primary { color: var(--accent); border-color: var(--accent); }
+  button.action.primary:hover { background: rgba(88,166,255,0.1); }
+  button.action:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* Mount new session button */
+  button.mount-btn {
+    background: var(--accent); color: #000; border: none; border-radius: 6px;
+    padding: 8px 18px; font-weight: 600; cursor: pointer; font-size: 0.85rem;
+    font-family: inherit;
+  }
+  button.mount-btn:hover { opacity: 0.9; }
+  button.mount-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* Status banner */
+  .banner {
+    padding: 10px 14px; border-radius: 6px; font-size: 0.82rem;
+    margin-bottom: 16px; display: none;
+  }
+  .banner.info { background: rgba(88,166,255,0.1); border: 1px solid rgba(88,166,255,0.3); color: var(--accent); }
+  .banner.success { background: rgba(63,185,80,0.1); border: 1px solid rgba(63,185,80,0.3); color: var(--green); }
+  .banner.error { background: rgba(248,81,73,0.1); border: 1px solid rgba(248,81,73,0.3); color: var(--red); }
+  .banner.live { display: block; }
+
+  /* Spinner */
+  .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.6s linear infinite; vertical-align: middle; margin-right: 6px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Live session pill */
+  .live-pill {
+    display: inline-flex; align-items: center; gap: 5px;
+    background: rgba(63,185,80,0.12); border: 1px solid rgba(63,185,80,0.4);
+    border-radius: 10px; padding: 2px 8px; font-size: 0.68rem; color: var(--green);
+  }
+  .live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); animation: pulse 1.5s ease-in-out infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+  /* Empty state */
+  .empty-state { text-align: center; padding: 48px 24px; color: var(--muted); }
+  .empty-state p { margin-bottom: 8px; }
+
+  /* Loading skeleton */
+  .skeleton { background: linear-gradient(90deg, var(--surface) 25%, #1e2530 50%, var(--surface) 75%); background-size: 200% 100%; animation: shimmer 1.2s infinite; border-radius: 4px; height: 14px; margin-bottom: 6px; }
+  @keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Mod&#179; <span class="sub">Sessions</span></h1>
+  <nav class="tabs">
+    <a class="tab" href="/dashboard">Dashboard</a>
+    <a class="tab" href="/dashboard/console.html">Console</a>
+    <a class="tab" href="/dashboard/voice-lab.html">Voice Lab</a>
+    <a class="tab active" href="/dashboard/sessions.html">Sessions</a>
+  </nav>
+</div>
+
+<div class="main">
+
+  <!-- Status banner (spawn feedback) -->
+  <div class="banner" id="status-banner"></div>
+
+  <!-- Project view -->
+  <div id="projects-view">
+    <div class="section-header">
+      <div class="section-title">Claude Code Projects</div>
+      <button class="mount-btn" id="mount-new-btn" title="Start a fresh Claude Code session">+ Mount New Session</button>
+    </div>
+    <div class="project-grid" id="project-grid">
+      <!-- Populated by JS -->
+      <div style="grid-column:1/-1; padding:24px; color:var(--muted); font-size:0.85rem;">
+        <span class="spinner"></span> Loading projects...
+      </div>
+    </div>
+  </div>
+
+  <!-- Session view (shown when a project is selected) -->
+  <div id="sessions-view" style="display:none;">
+    <div class="breadcrumb" id="breadcrumb">
+      <a href="#" id="back-to-projects">Projects</a>
+      <span>&#8250;</span>
+      <span id="selected-project-name"></span>
+    </div>
+    <div class="section-header">
+      <div class="section-title">Sessions</div>
+      <button class="mount-btn" id="mount-in-project-btn">+ New Session in Project</button>
+    </div>
+    <div class="session-list" id="session-list">
+      <!-- Populated by JS -->
+    </div>
+  </div>
+
+</div>
+
+<script>
+// sessions.js — vanilla JS, no dependencies.
+// Talks to:
+//   GET  http://localhost:6931/v1/claude-code/projects
+//   GET  http://localhost:6931/v1/claude-code/projects/{project}/sessions
+//   POST http://localhost:6931/v1/claude-code/spawn
+
+const KERNEL_URL = 'http://localhost:6931';
+
+// ── State ────────────────────────────────────────────────────────────────────
+
+let selectedProject = null;
+let liveProcessId = null;     // process_id returned by last spawn call
+
+// ── DOM refs ─────────────────────────────────────────────────────────────────
+
+const projectsView  = document.getElementById('projects-view');
+const sessionsView  = document.getElementById('sessions-view');
+const projectGrid   = document.getElementById('project-grid');
+const sessionList   = document.getElementById('session-list');
+const statusBanner  = document.getElementById('status-banner');
+const selectedLabel = document.getElementById('selected-project-name');
+const backBtn       = document.getElementById('back-to-projects');
+const mountNewBtn   = document.getElementById('mount-new-btn');
+const mountInProjBtn = document.getElementById('mount-in-project-btn');
+
+// ── Utility ──────────────────────────────────────────────────────────────────
+
+function showBanner(msg, kind) {
+  statusBanner.textContent = msg;
+  statusBanner.className = `banner ${kind} live`;
+}
+
+function hideBanner() {
+  statusBanner.className = 'banner';
+}
+
+function fmtDate(isoStr) {
+  if (!isoStr) return '—';
+  const d = new Date(isoStr);
+  const now = new Date();
+  const diffMs = now - d;
+  const diffH = diffMs / 3600000;
+  if (diffH < 1) return `${Math.round(diffMs / 60000)}m ago`;
+  if (diffH < 24) return `${Math.round(diffH)}h ago`;
+  return d.toLocaleDateString();
+}
+
+// ── Projects ─────────────────────────────────────────────────────────────────
+
+async function loadProjects() {
+  projectGrid.innerHTML = `<div style="grid-column:1/-1;padding:24px;color:var(--muted);font-size:0.85rem;"><span class="spinner"></span> Loading projects...</div>`;
+  try {
+    const r = await fetch(`${KERNEL_URL}/v1/claude-code/projects`, { signal: AbortSignal.timeout(5000) });
+    if (!r.ok) throw new Error(`kernel returned ${r.status}`);
+    const data = await r.json();
+    renderProjects(data.projects || []);
+  } catch (e) {
+    projectGrid.innerHTML = `<div style="grid-column:1/-1;" class="empty-state"><p>Cannot reach CogOS kernel at ${KERNEL_URL}.</p><p style="font-size:0.75rem;">${e.message}</p></div>`;
+  }
+}
+
+function renderProjects(projects) {
+  if (!projects.length) {
+    projectGrid.innerHTML = `<div style="grid-column:1/-1;" class="empty-state"><p>No Claude Code projects found.</p><p style="font-size:0.75rem;">Projects live under ~/.claude/projects/</p></div>`;
+    return;
+  }
+  // Sort by last_activity desc
+  projects.sort((a, b) => new Date(b.last_activity) - new Date(a.last_activity));
+  projectGrid.innerHTML = '';
+  for (const p of projects) {
+    const card = document.createElement('div');
+    card.className = 'project-card';
+    card.innerHTML = `
+      <div class="project-name">${escHtml(p.name)}</div>
+      <div class="project-meta">
+        <span title="Last activity">&#128337; ${fmtDate(p.last_activity)}</span>
+        <span title="Session files">&#128196; ${p.session_count} session${p.session_count !== 1 ? 's' : ''}</span>
+      </div>
+    `;
+    card.addEventListener('click', () => openProject(p.name));
+    projectGrid.appendChild(card);
+  }
+}
+
+// ── Session browser ───────────────────────────────────────────────────────────
+
+async function openProject(name) {
+  selectedProject = name;
+  selectedLabel.textContent = name;
+  projectsView.style.display = 'none';
+  sessionsView.style.display = 'block';
+  hideBanner();
+  sessionList.innerHTML = `<div style="padding:24px;color:var(--muted);font-size:0.85rem;"><span class="spinner"></span> Loading sessions...</div>`;
+
+  try {
+    const r = await fetch(`${KERNEL_URL}/v1/claude-code/projects/${encodeURIComponent(name)}/sessions`, { signal: AbortSignal.timeout(5000) });
+    if (!r.ok) throw new Error(`kernel returned ${r.status}`);
+    const data = await r.json();
+    renderSessions(data.sessions || []);
+  } catch (e) {
+    sessionList.innerHTML = `<div class="empty-state"><p>Failed to load sessions.</p><p style="font-size:0.75rem;">${e.message}</p></div>`;
+  }
+}
+
+function renderSessions(sessions) {
+  if (!sessions.length) {
+    sessionList.innerHTML = `<div class="empty-state"><p>No sessions found in this project.</p></div>`;
+    return;
+  }
+  // Sort by last_modified desc
+  sessions.sort((a, b) => new Date(b.last_modified) - new Date(a.last_modified));
+  sessionList.innerHTML = '';
+  for (const s of sessions) {
+    const card = document.createElement('div');
+    card.className = 'session-card';
+    const preview = s.first_prompt_summary
+      ? escHtml(s.first_prompt_summary)
+      : '<span class="empty">(no prompt recorded)</span>';
+    card.innerHTML = `
+      <div class="session-info">
+        <div class="session-id">${escHtml(s.session_id)}</div>
+        <div class="session-preview ${s.first_prompt_summary ? '' : 'empty'}">${preview}</div>
+        <div class="session-meta">
+          <span>&#128337; ${fmtDate(s.last_modified)}</span>
+          <span>&#8635; ${s.turn_count} turn${s.turn_count !== 1 ? 's' : ''}</span>
+          <span>&#128172; ${s.total_messages} msg${s.total_messages !== 1 ? 's' : ''}</span>
+        </div>
+      </div>
+      <div class="session-actions">
+        <button class="action primary resume-btn" data-sid="${escHtml(s.session_id)}" title="Resume this session in the dashboard">Resume</button>
+      </div>
+    `;
+    sessionList.appendChild(card);
+  }
+  // Wire Resume buttons
+  sessionList.querySelectorAll('.resume-btn').forEach(btn => {
+    btn.addEventListener('click', () => spawnSession(btn.dataset.sid, btn));
+  });
+}
+
+// ── Spawn ─────────────────────────────────────────────────────────────────────
+
+async function spawnSession(sessionId, btn) {
+  const isResume = !!sessionId;
+  const label = isResume ? 'Resuming...' : 'Mounting...';
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = label;
+  }
+  mountNewBtn.disabled = true;
+  mountInProjBtn.disabled = true;
+  showBanner(`${label} Please wait.`, 'info');
+
+  try {
+    const body = { project: selectedProject || undefined };
+    if (sessionId) body.session_id = sessionId;
+
+    const r = await fetch('/v1/claude-code/spawn', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(15000),
+    });
+    const data = await r.json();
+    if (!r.ok) {
+      throw new Error(data.error?.message || `spawn returned ${r.status}`);
+    }
+    liveProcessId = data.process_id;
+    const msg = isResume
+      ? `Session resumed (process ${data.process_id}). The Claude Code subprocess is starting — check the Dashboard tab for the channel-client seat to appear.`
+      : `New session mounted (process ${data.process_id}). Switch to the Dashboard tab to interact.`;
+    showBanner(msg, 'success');
+  } catch (e) {
+    showBanner(`Spawn failed: ${e.message}`, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Resume'; }
+  } finally {
+    mountNewBtn.disabled = false;
+    mountInProjBtn.disabled = false;
+  }
+}
+
+// ── Event wiring ──────────────────────────────────────────────────────────────
+
+backBtn.addEventListener('click', e => {
+  e.preventDefault();
+  selectedProject = null;
+  sessionsView.style.display = 'none';
+  projectsView.style.display = 'block';
+  hideBanner();
+  loadProjects();
+});
+
+mountNewBtn.addEventListener('click', () => {
+  selectedProject = null;
+  spawnSession(null, mountNewBtn);
+});
+
+mountInProjBtn.addEventListener('click', () => spawnSession(null, mountInProjBtn));
+
+// ── HTML escaping ─────────────────────────────────────────────────────────────
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+
+loadProjects();
+</script>
+</body>
+</html>
