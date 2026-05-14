@@ -20,6 +20,19 @@
   }
   .header h1 { font-size: 1.2rem; margin-right: auto; }
   .header h1 .sub { color: var(--muted); font-weight: 400; font-size: 0.95rem; margin-left: 8px; }
+  /* Page nav tabs (added 2026-05-13) */
+  .tabs { display: flex; gap: 4px; margin-right: 16px; }
+  .tab {
+    padding: 6px 12px; text-decoration: none;
+    color: var(--muted); font-size: 0.85rem;
+    border: 1px solid transparent; border-radius: 4px;
+    transition: color 0.15s, background 0.15s, border-color 0.15s;
+  }
+  .tab:hover { color: var(--text); background: var(--bg); }
+  .tab.active {
+    color: var(--accent); border-color: var(--accent);
+    background: var(--surface);
+  }
   .nav-link {
     color: var(--muted); text-decoration: none; font-size: 0.85rem;
     padding: 4px 10px; border: 1px solid var(--border); border-radius: 4px;
@@ -101,7 +114,11 @@
 
 <div class="header">
   <h1>Mod&#179; <span class="sub">Voice Lab</span></h1>
-  <a class="nav-link" href="/dashboard/console.html">&larr; Console</a>
+  <nav class="tabs">
+    <a class="tab" href="/dashboard">Dashboard</a>
+    <a class="tab" href="/dashboard/console.html">Console</a>
+    <a class="tab active" href="/dashboard/voice-lab.html">Voice Lab</a>
+  </nav>
 </div>
 
 <div class="main">
