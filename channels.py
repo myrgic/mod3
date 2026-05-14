@@ -33,13 +33,35 @@ from typing import Any, Awaitable, Callable
 
 import numpy as np
 from fastapi import WebSocket, WebSocketDisconnect
+from pydantic import TypeAdapter, ValidationError
 
 from bus import ModalityBus
 from modality import CognitiveEvent, EncodedOutput, ModalityType
 from modules.voice import WhisperDecoder
 from pipeline_state import PipelineState
+from schemas.ws_chat import (
+    AudioFrame,
+    ConfigFrame,
+    EndOfSpeechFrame,
+    InboundFrame,
+    InterruptedFrame,
+    InterruptFrame,
+    PartialTranscriptFrame,
+    ResponseCompleteFrame,
+    ResponseTextFrame,
+    TextMessageFrame,
+    TraceEventFrame,
+    TranscriptFrame,
+    WsErrorDetail,
+    WsErrorFrame,
+)
 
 logger = logging.getLogger("mod3.channels")
+
+# Module-level TypeAdapter for the InboundFrame discriminated union.
+# Built once at import time; used in BrowserChannel._handle_json for
+# validated dispatch without per-call TypeAdapter construction overhead.
+_INBOUND_FRAME_ADAPTER: TypeAdapter[InboundFrame] = TypeAdapter(InboundFrame)
 
 # ---------------------------------------------------------------------------
 # Dedicated STT executor — isolated from the asyncio default thread pool.
@@ -154,20 +176,20 @@ class BrowserChannel:
             # Send audio as base64 JSON (avoids binary frame issues)
             audio_b64 = base64.b64encode(output.data).decode("ascii")
             logger.info("deliver: sending base64 audio JSON (%d chars)", len(audio_b64))
-            await self.ws.send_json(
-                {
-                    "type": "audio",
-                    "data": audio_b64,
-                    "format": output.format or "wav",
-                    "duration_sec": round(output.duration_sec, 2),
-                    "sample_rate": output.metadata.get("sample_rate", 24000),
-                }
+            frame = AudioFrame(
+                type="audio",
+                data=audio_b64,
+                format=output.format or "wav",
+                duration_sec=round(output.duration_sec, 2),
+                sample_rate=output.metadata.get("sample_rate", 24000),
             )
+            await self.ws.send_json(frame.model_dump(exclude_none=True))
             logger.info("deliver: audio sent OK")
         elif output.modality == ModalityType.TEXT:
             text = output.data.decode("utf-8") if isinstance(output.data, bytes) else str(output.data)
             logger.info("deliver: sending text response (%d chars)", len(text))
-            await self.ws.send_json({"type": "response_text", "text": text})
+            frame = ResponseTextFrame(type="response_text", text=text)
+            await self.ws.send_json(frame.model_dump(exclude_none=True))
         else:
             logger.warning("deliver: unhandled modality %s, dropping", output.modality)
 
@@ -220,22 +242,36 @@ class BrowserChannel:
             asyncio.ensure_future(self._schedule_t2_on_pause())
 
     async def _handle_json(self, msg: dict) -> None:
-        """JSON frame: control message dispatch."""
+        """JSON frame: control message dispatch via discriminated InboundFrame union."""
         msg_type = msg.get("type", "")
         logger.info("Received JSON: type=%s", msg_type)
 
-        if msg_type == "end_of_speech":
-            await self._process_utterance()
-        elif msg_type == "text_message":
-            text = msg.get("text", "").strip()
-            if text:
-                await self._process_text(text)
-        elif msg_type == "interrupt":
-            await self._handle_interrupt()
-        elif msg_type == "config":
-            for key in ("model", "voice", "speed"):
-                if key in msg:
-                    self.config[key] = msg[key]
+        try:
+            frame: InboundFrame = _INBOUND_FRAME_ADAPTER.validate_python(msg)  # type: ignore[assignment]
+        except (ValidationError, KeyError) as exc:
+            logger.warning("Unrecognised inbound frame (type=%r): %s", msg_type, exc)
+            await self._send_error("invalid_frame", f"unrecognised frame type: {msg_type!r}")
+            return
+
+        try:
+            if isinstance(frame, EndOfSpeechFrame):
+                await self._process_utterance()
+            elif isinstance(frame, TextMessageFrame):
+                text = frame.text.strip()
+                if text:
+                    await self._process_text(text)
+            elif isinstance(frame, InterruptFrame):
+                await self._handle_interrupt()
+            elif isinstance(frame, ConfigFrame):
+                if frame.model is not None:
+                    self.config["model"] = frame.model
+                if frame.voice is not None:
+                    self.config["voice"] = frame.voice
+                if frame.speed is not None:
+                    self.config["speed"] = frame.speed
+        except Exception as exc:  # noqa: BLE001
+            logger.error("handler error for frame type=%r: %s", msg_type, exc)
+            await self._send_error("handler_error", str(exc))
 
     # ------------------------------------------------------------------
     # Three-Tier STT
@@ -262,15 +298,14 @@ class BrowserChannel:
             loop = asyncio.get_event_loop()
             result = await loop.run_in_executor(_STT_EXECUTOR, _transcribe_t1)
             if result and result.get("changed") and not result.get("filtered"):
-                await self.ws.send_json(
-                    {
-                        "type": "partial_transcript",
-                        "confirmed": result["confirmed"],
-                        "tentative": result["tentative"],
-                        "tier": "t1",
-                        "elapsed_ms": result["elapsed_ms"],
-                    }
+                frame = PartialTranscriptFrame(
+                    type="partial_transcript",
+                    confirmed=result["confirmed"],
+                    tentative=result["tentative"],
+                    tier="t1",
+                    elapsed_ms=result["elapsed_ms"],
                 )
+                await self.ws.send_json(frame.model_dump(exclude_none=True))
         except Exception as e:
             logger.debug("T1 error: %s", e)
 
@@ -295,15 +330,14 @@ class BrowserChannel:
             loop = asyncio.get_event_loop()
             result = await loop.run_in_executor(_STT_EXECUTOR, _transcribe_t2)
             if result and not result.get("filtered"):
-                await self.ws.send_json(
-                    {
-                        "type": "partial_transcript",
-                        "confirmed": result["confirmed"],
-                        "tentative": result["tentative"],
-                        "tier": "t2",
-                        "elapsed_ms": result["elapsed_ms"],
-                    }
+                frame = PartialTranscriptFrame(
+                    type="partial_transcript",
+                    confirmed=result["confirmed"],
+                    tentative=result["tentative"],
+                    tier="t2",
+                    elapsed_ms=result["elapsed_ms"],
                 )
+                await self.ws.send_json(frame.model_dump(exclude_none=True))
         except Exception as e:
             logger.debug("T2 error: %s", e)
         finally:
@@ -408,20 +442,24 @@ class BrowserChannel:
                 os.unlink(tmp_path)
 
         loop = asyncio.get_event_loop()
-        event = await loop.run_in_executor(_STT_EXECUTOR, _transcribe)
+        try:
+            event = await loop.run_in_executor(_STT_EXECUTOR, _transcribe)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("STT executor error: %s", exc)
+            await self._send_error("stt_failed", str(exc))
+            return
 
         stt_ms = (time.perf_counter() - t0) * 1000
 
         if event and event.content:
             # Send transcript to browser
-            await self.ws.send_json(
-                {
-                    "type": "transcript",
-                    "text": event.content,
-                    "stt_ms": round(stt_ms, 1),
-                    "source": "voice",
-                }
+            frame = TranscriptFrame(
+                type="transcript",
+                text=event.content,
+                stt_ms=round(stt_ms, 1),
+                source="voice",
             )
+            await self.ws.send_json(frame.model_dump(exclude_none=True))
             # Forward to agent loop
             event.metadata["stt_ms"] = stt_ms
             if self._on_event:
@@ -435,13 +473,8 @@ class BrowserChannel:
             source_channel=self.channel_id,
             confidence=1.0,
         )
-        await self.ws.send_json(
-            {
-                "type": "transcript",
-                "text": text,
-                "source": "text",
-            }
-        )
+        frame = TranscriptFrame(type="transcript", text=text, source="text")
+        await self.ws.send_json(frame.model_dump(exclude_none=True))
         if self._on_event:
             await self._on_event(event)
 
@@ -449,7 +482,23 @@ class BrowserChannel:
         """Interrupt in-flight speech."""
         if self.pipeline_state.is_speaking:
             self.pipeline_state.interrupt(reason="browser_interrupt")
-        await self.ws.send_json({"type": "interrupted"})
+        frame = InterruptedFrame(type="interrupted")
+        await self.ws.send_json(frame.model_dump(exclude_none=True))
+
+    async def _send_error(self, code: str, message: str, data: Any = None) -> None:
+        """Emit a structured WsErrorFrame to the browser.
+
+        Called from exception paths in _handle_json and _process_utterance.
+        Never raises — a broken WebSocket at this point is a no-op.
+        """
+        try:
+            frame = WsErrorFrame(
+                type="error",
+                error=WsErrorDetail(code=code, message=message, data=data),
+            )
+            await self.ws.send_json(frame.model_dump(exclude_none=True))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("_send_error failed (WS closed?): %s", exc)
 
     # ------------------------------------------------------------------
     # Helper methods (called by agent loop)
@@ -460,7 +509,8 @@ class BrowserChannel:
         if self._active:
             try:
                 logger.info("send_response_text: %s", text[:100])
-                await self.ws.send_json({"type": "response_text", "text": text})
+                frame = ResponseTextFrame(type="response_text", text=text)
+                await self.ws.send_json(frame.model_dump(exclude_none=True))
             except Exception:
                 self._active = False
 
@@ -468,12 +518,8 @@ class BrowserChannel:
         """Signal response is complete."""
         if self._active:
             try:
-                await self.ws.send_json(
-                    {
-                        "type": "response_complete",
-                        "metrics": metrics or {},
-                    }
-                )
+                frame = ResponseCompleteFrame(type="response_complete", metrics=metrics or {})
+                await self.ws.send_json(frame.model_dump(exclude_none=True))
             except Exception:
                 self._active = False
 
@@ -491,7 +537,8 @@ class BrowserChannel:
         active BrowserChannel's WebSocket. Clients whose send fails are
         skipped silently (they will be pruned by their own disconnect path).
         """
-        frame = {"type": "trace_event", "event": event}
+        tf = TraceEventFrame(type="trace_event", event=event)
+        frame = tf.model_dump(exclude_none=True)
         for ch in list(cls._active_channels):
             if not ch._active:
                 continue
@@ -519,7 +566,8 @@ class BrowserChannel:
         Thread-safe: dispatches each WS send via `run_coroutine_threadsafe`
         on the channel's own loop, matching `broadcast_trace_event`.
         """
-        frame = {"type": "response_text", "text": text}
+        rf = ResponseTextFrame(type="response_text", text=text)
+        frame = rf.model_dump(exclude_none=True)
         expected_channel = None
         if session_id and session_id.startswith("mod3:"):
             expected_channel = session_id[len("mod3:") :]
@@ -553,7 +601,8 @@ class BrowserChannel:
         "provider": ...}`); the kernel path populates it with
         `{"provider": "cogos-agent", ...}`.
         """
-        frame = {"type": "response_complete", "metrics": metrics or {}}
+        rcf = ResponseCompleteFrame(type="response_complete", metrics=metrics or {})
+        frame = rcf.model_dump(exclude_none=True)
         expected_channel = None
         if session_id and session_id.startswith("mod3:"):
             expected_channel = session_id[len("mod3:") :]
