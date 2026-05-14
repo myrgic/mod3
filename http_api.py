@@ -1507,7 +1507,9 @@ async def proxy_claude_code_spawn(request: Request):
         logger.warning("claude-code spawn proxy: kernel unreachable at %s", target)
         return JSONResponse(
             status_code=503,
-            content={"error": {"type": "kernel_unavailable", "message": f"CogOS kernel unreachable at {_cogos_kernel_url}"}},
+            content={
+                "error": {"type": "kernel_unavailable", "message": f"CogOS kernel unreachable at {_cogos_kernel_url}"}
+            },
         )
     except Exception as exc:
         logger.exception("claude-code spawn proxy: unexpected error")
