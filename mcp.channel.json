@@ -1,12 +1,22 @@
 {
   "mcpServers": {
-    "mod3-voice": {
+    "mod3": {
       "command": "python3",
-      "args": ["server.py", "--channel"]
+      "args": ["server.py", "--channel"],
+      "_comment": "Start with: claude --dangerously-load-development-channels server:mod3"
     }
+  },
+  "_channelCapabilities": {
+    "claude/channel": {},
+    "claude/channel/permission": {}
   },
   "_toolManifest": {
     "note": "Tool manifest for documentation; actual tool registration is in server.py FastMCP instance.",
+    "inbound": {
+      "description": "Messages from the dashboard arrive as channel tags in Claude's context",
+      "format": "<channel source=\"mod3\" session_id=\"browser:xxxx\" input_type=\"text|voice\">content</channel>",
+      "pairing": "<channel source=\"mod3\" pairing_request=\"true\" identifier=\"uuid\" code=\"abcde\">...</channel>"
+    },
     "tools": [
       {"name": "speak", "description": "Synthesize text to speech and play it through the user's speakers."},
       {"name": "speech_status", "description": "Check status of a speech job, or get the most recent result."},
@@ -21,5 +31,9 @@
       {"name": "list_sessions", "description": "List all registered sessions with live device resolution."},
       {"name": "mod3_dashboard_post", "description": "Send response text from Claude Code to the mod3 dashboard chat panel (Path B symmetric outbound channel)."}
     ]
-  }
+  },
+  "_skills": [
+    "skills/mod3-configure/SKILL.md",
+    "skills/mod3-access/SKILL.md"
+  ]
 }
