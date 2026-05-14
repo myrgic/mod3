@@ -76,20 +76,38 @@ class AgentCapabilities(_Base):
     sessionCapabilities: dict[str, Any] = Field(default_factory=dict)
 
 
+class AgentInfo(_Base):
+    """Identifying information about the agent (mod3)."""
+
+    name: str = "mod3"
+    title: str = "Mod3 — Voice Modality Provider"
+    version: str = "0.4.0"
+
+
 class InitializeResult(_Base):
     """Result returned by the ``initialize`` method.
 
-    Wire shape::
+    Wire shape (per ACP spec)::
 
         {
+          "protocolVersion": 1,
           "agentCapabilities": {
             "promptCapabilities": {"audio": false, "image": false, "embeddedContext": false},
             "sessionCapabilities": {}
-          }
+          },
+          "agentInfo": {"name": "mod3", "title": "...", "version": "..."},
+          "authMethods": []
         }
+
+    The earlier shape omitted ``protocolVersion`` and ``agentInfo`` which the
+    ACP spec lists as required client-side validation fields; some clients
+    refuse to proceed without them. Restored 2026-05-13.
     """
 
+    protocolVersion: int = 1
     agentCapabilities: AgentCapabilities = Field(default_factory=AgentCapabilities)
+    agentInfo: AgentInfo = Field(default_factory=AgentInfo)
+    authMethods: list[dict[str, Any]] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
