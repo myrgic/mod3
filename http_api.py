@@ -1361,7 +1361,8 @@ async def ws_acp(websocket: WebSocket):
 
     async def _send_response(request_id: int | str, result: object) -> None:
         resp = JsonRpcResponse.ok(
-            request_id=request_id, result=result if isinstance(result, dict) else result.model_dump()
+            request_id=request_id,
+            result=result if isinstance(result, dict) else result.model_dump(),  # pyright: ignore[reportAttributeAccessIssue]
         )
         await _send(resp.model_dump(exclude_none=True))
 
@@ -1438,7 +1439,7 @@ async def ws_acp(websocket: WebSocket):
             )
 
             if asyncio.iscoroutinefunction(getattr(agent, "process_text_async", None)):
-                await agent.process_text_async(event, on_chunk=_on_chunk)
+                await agent.process_text_async(event, on_chunk=_on_chunk)  # pyright: ignore[reportAttributeAccessIssue]
             elif hasattr(agent, "handle_event"):
                 # Synchronous handle_event; collect full response, then emit.
                 collected_response: list[str] = []
@@ -1450,7 +1451,7 @@ async def ws_acp(websocket: WebSocket):
                     async def send_response_complete(self, *a, **kw) -> None:
                         pass
 
-                agent._channel_ref = _MockChannel()
+                agent._channel_ref = _MockChannel()  # pyright: ignore[reportAttributeAccessIssue]
                 await agent.handle_event(event)
                 full = "".join(collected_response)
                 if full:
