@@ -47,12 +47,9 @@ from _version import __version__
 from audio_subscribers import get_default_audio_subscribers
 from bus import ModalityBus
 from chat_flow_log import (
-    CHAT_ECHO_SUPPRESSED,
-    CHAT_ERROR,
     CHAT_FAN_OUT,
     CHAT_MESSAGE_RECEIVED,
     CHAT_MESSAGE_SENT,
-    CHAT_RESPONSE_GENERATED,
     get_chat_flow_log,
 )
 from engine import MODELS, generate_audio, get_loaded_engines
