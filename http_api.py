@@ -1443,6 +1443,80 @@ async def dashboard_page():
     return JSONResponse({"error": "dashboard not found"}, status_code=404)
 
 
+@app.get("/dashboard/{filename:path}")
+async def dashboard_static(filename: str):
+    """Serve any file inside the dashboard/ directory.
+
+    This covers the Sessions browser (sessions.html), Voice Lab
+    (voice-lab.html), Console (console.html), and any supporting JS files
+    that live alongside the main index.html.
+    """
+    # Prevent path traversal.
+    safe = Path(filename).parts
+    if ".." in safe:
+        return JSONResponse({"error": "invalid path"}, status_code=400)
+    target = _dashboard_dir / filename
+    if target.exists() and target.is_file():
+        return FileResponse(str(target))
+    return JSONResponse({"error": f"{filename} not found"}, status_code=404)
+
+
+# ---------------------------------------------------------------------------
+# Claude Code ACP-client proxy
+# ---------------------------------------------------------------------------
+# The sessions.html dashboard page calls /v1/claude-code/spawn on the mod3
+# origin (localhost:7860) so it avoids browser CORS restrictions when the
+# kernel is on a different port. This endpoint proxies the request to the
+# CogOS kernel and returns the kernel's response verbatim.
+
+_cogos_kernel_url = os.environ.get("COGOS_KERNEL_URL", "http://localhost:6931")
+
+
+@app.post("/v1/claude-code/spawn")
+async def proxy_claude_code_spawn(request: Request):
+    """Proxy POST /v1/claude-code/spawn to the CogOS kernel.
+
+    Accepts the same body as the kernel endpoint:
+      { project?, session_id?, dangerously_load_development_channels? }
+
+    Returns the kernel's response (201 on success, 4xx/5xx on error).
+    This proxy exists so the dashboard UI can call a same-origin endpoint
+    rather than cross-origin to localhost:6931.
+    """
+    import httpx
+
+    try:
+        body = await request.body()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "cannot read request body"})
+
+    target = f"{_cogos_kernel_url}/v1/claude-code/spawn"
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.post(
+                target,
+                content=body,
+                headers={"Content-Type": "application/json"},
+            )
+        return Response(
+            content=resp.content,
+            status_code=resp.status_code,
+            media_type="application/json",
+        )
+    except httpx.ConnectError:
+        logger.warning("claude-code spawn proxy: kernel unreachable at %s", target)
+        return JSONResponse(
+            status_code=503,
+            content={"error": {"type": "kernel_unavailable", "message": f"CogOS kernel unreachable at {_cogos_kernel_url}"}},
+        )
+    except Exception as exc:
+        logger.exception("claude-code spawn proxy: unexpected error")
+        return JSONResponse(
+            status_code=502,
+            content={"error": {"type": "proxy_error", "message": str(exc)}},
+        )
+
+
 @app.websocket("/ws/audio/{session_id}")
 async def ws_audio(websocket: WebSocket, session_id: str):
     """Wave 4.3 — per-session playback channel for the dashboard.
