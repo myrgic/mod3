@@ -19,10 +19,13 @@ Endpoints:
   GET  /v1/sessions/{id}/seats             — list seats in a session
   POST /v1/sessions/{id}/messages          — fan dashboard text to all seats
   POST /v1/dashboard-chat                  — REST dashboard-chat (for channel clients)
+  GET  /v1/logs/chat-flow                  — recent chat-flow events (JSON)
+  GET  /v1/logs/chat-flow/stream           — live SSE stream of chat-flow events
 """
 
 import asyncio
 import io
+import json
 import logging
 import os
 import signal
@@ -43,6 +46,15 @@ from fastapi.staticfiles import StaticFiles
 from _version import __version__
 from audio_subscribers import get_default_audio_subscribers
 from bus import ModalityBus
+from chat_flow_log import (
+    CHAT_ECHO_SUPPRESSED,
+    CHAT_ERROR,
+    CHAT_FAN_OUT,
+    CHAT_MESSAGE_RECEIVED,
+    CHAT_MESSAGE_SENT,
+    CHAT_RESPONSE_GENERATED,
+    get_chat_flow_log,
+)
 from engine import MODELS, generate_audio, get_loaded_engines
 from modality import EncodedOutput, ModalityType
 from modules.text import TextModule
@@ -1108,6 +1120,20 @@ async def session_message(session_id: str, request: Request):
     input_type = body.get("input_type", "text")
     role = body.get("role", "user")
 
+    msg_id = str(uuid.uuid4())[:8]
+    try:
+        get_chat_flow_log().emit(
+            CHAT_MESSAGE_RECEIVED,
+            session_id,
+            msg_id,
+            "http",
+            [],
+            content,
+            "inbound",
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
     registry = get_seat_registry()
     count = registry.fan_out(
         session_id,
@@ -1118,6 +1144,21 @@ async def session_message(session_id: str, request: Request):
             "role": role,
         },
     )
+
+    try:
+        seat_ids = [s["seat_id"] for s in registry.list_session_seats(session_id)]
+        get_chat_flow_log().emit(
+            CHAT_FAN_OUT,
+            session_id,
+            msg_id,
+            "http",
+            seat_ids,
+            content,
+            "inbound",
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
     return {"status": "ok", "session_id": session_id, "seats_notified": count}
 
 
@@ -1169,7 +1210,117 @@ async def dashboard_chat_post(request: Request):
             },
         )
 
+    try:
+        get_chat_flow_log().emit(
+            CHAT_MESSAGE_SENT,
+            session_id or "",
+            str(uuid.uuid4())[:8],
+            "http",
+            [],
+            text,
+            "outbound",
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
     return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Chat-flow log endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.get("/v1/logs/chat-flow")
+def chat_flow_log_query(
+    session_id: Optional[str] = None,
+    event_type: Optional[str] = None,
+    since: Optional[str] = None,
+    limit: int = 100,
+):
+    """Return recent structured chat-flow events from the in-memory ring buffer.
+
+    Query parameters:
+      session_id  — filter to a single session (optional)
+      event_type  — comma-separated event type filter, e.g. chat.message_received,chat.fan_out
+      since       — ISO 8601 timestamp; only events at or after this time are returned
+      limit       — max events to return (default 100, max 1000)
+
+    Returns:
+      {"events": [...], "count": N}
+
+    Verification:
+      curl 'http://localhost:7860/v1/logs/chat-flow?limit=20'
+    """
+    limit = max(1, min(limit, 1000))
+    events = get_chat_flow_log().query(
+        session_id=session_id,
+        event_type=event_type,
+        since=since,
+        limit=limit,
+    )
+    return {"events": events, "count": len(events)}
+
+
+@app.get("/v1/logs/chat-flow/stream")
+async def chat_flow_log_stream(
+    session_id: Optional[str] = None,
+    event_type: Optional[str] = None,
+    since: Optional[str] = None,
+    limit: int = 100,
+):
+    """SSE live-tail of structured chat-flow events.
+
+    Opens a ``text/event-stream`` that pushes new events as they arrive.
+    Supports the same filter params as GET /v1/logs/chat-flow.
+    Each event is emitted as::
+
+      event: chat_flow
+      data: {"ts":"...","event_type":"chat.message_received",...}
+
+    Keep-alive comments are sent every 15 s.
+
+    Close by disconnecting (the server cleans up the subscription on disconnect).
+    """
+    from fastapi.responses import StreamingResponse
+
+    event_types: set[str] | None = None
+    if event_type:
+        event_types = {t.strip() for t in event_type.split(",") if t.strip()}
+
+    limit = max(1, min(limit, 1000))
+    log = get_chat_flow_log()
+
+    async def _generate():
+        q = log.subscribe()
+        try:
+            KEEPALIVE = 15.0
+            while True:
+                try:
+                    event = await asyncio.wait_for(q.get(), timeout=KEEPALIVE)
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
+                # Apply filters
+                if session_id and event.get("session_id") != session_id:
+                    continue
+                if event_types and event.get("event_type") not in event_types:
+                    continue
+                data = json.dumps(event, separators=(",", ":"))
+                yield f"event: chat_flow\ndata: {data}\n\n"
+        except asyncio.CancelledError:
+            pass
+        finally:
+            log.unsubscribe(q)
+
+    return StreamingResponse(
+        _generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.get("/health")
@@ -1766,7 +1917,35 @@ async def ws_acp(websocket: WebSocket):
                 # Ensure session exists (create on-demand for resilience).
                 if session_id not in _sessions:
                     _sessions[session_id] = {"cancel": asyncio.Event()}
+                _acp_msg_id = str(uuid4())[:8]
+                try:
+                    get_chat_flow_log().emit(
+                        CHAT_MESSAGE_RECEIVED,
+                        session_id,
+                        _acp_msg_id,
+                        "acp",
+                        [],
+                        user_text,
+                        "inbound",
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
                 await _stream_prompt(session_id, user_text, msg_id)
+                try:
+                    from seats import get_seat_registry as _get_sr
+
+                    _seat_ids = [s["seat_id"] for s in _get_sr().list_session_seats(session_id)]
+                    get_chat_flow_log().emit(
+                        CHAT_FAN_OUT,
+                        session_id,
+                        _acp_msg_id,
+                        "acp",
+                        _seat_ids,
+                        user_text,
+                        "inbound",
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
 
             # ---- session/cancel (notification) ----
             elif method == "session/cancel":

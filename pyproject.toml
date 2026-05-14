@@ -8,7 +8,7 @@ requires-python = ">=3.12"
 pipecat = ["pipecat-ai>=0.0.50"]
 
 [tool.setuptools]
-py-modules = ["_version", "adaptive_player", "agent_loop", "audio_subscribers", "bus", "bus_bridge", "bus_bridge_runner", "capture", "channels", "cogos_agent_bridge", "draft_queue", "engine", "http_api", "inbound", "mcp_shim", "modality", "output_queue", "pipeline_state", "providers", "server", "session_registry", "vad", "voice_profile_io", "voice_profile_schema", "voice_profiles"]
+py-modules = ["_version", "adaptive_player", "agent_loop", "audio_subscribers", "bus", "bus_bridge", "bus_bridge_runner", "capture", "channels", "chat_flow_log", "cogos_agent_bridge", "draft_queue", "engine", "http_api", "inbound", "mcp_shim", "modality", "output_queue", "pipeline_state", "providers", "server", "session_registry", "vad", "voice_profile_io", "voice_profile_schema", "voice_profiles"]
 # New package directories (must be declared alongside legacy py-modules so wheel/sdist
 # builds include them). Without these, ``python -m mod3.worker {tts,vad,stt}`` and the
 # Pipecat integration would be missing from installed deployments.
