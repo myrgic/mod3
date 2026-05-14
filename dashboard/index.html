@@ -1053,7 +1053,6 @@ chatInput.addEventListener('input', () => {
   let audioCtx = null;
   let reconnectDelay = 1000;
   let currentSessionId = null;
-  let pendingHeader = null;  // last JSON header waiting for its binary pair
   let pendingSinkId = null;  // selected output device id, applied once audioCtx exists
 
   async function applySinkId(ctx, sinkId) {
@@ -1138,18 +1137,72 @@ chatInput.addEventListener('input', () => {
     });
 
     ws.addEventListener('message', (ev) => {
-      if (typeof ev.data === 'string') {
+      // RTVI 1.3.0: all frames are JSON text. Binary frames are no longer sent.
+      if (typeof ev.data !== 'string') {
+        console.warn('[AudioWS] unexpected binary frame (old wire shape?) -- ignored');
+        return;
+      }
+      let msg;
+      try { msg = JSON.parse(ev.data); } catch { return; }
+
+      if (msg.label !== 'rtvi-ai') return;
+
+      if (msg.type === 'bot-tts-started') {
+        // Clear playback queue for new utterance.
+        if (window._playback) window._playback.flush();
+        console.log('[AudioWS] bot-tts-started');
+        return;
+      }
+
+      if (msg.type === 'bot-tts-audio') {
+        // Decode base64 int16 PCM and feed to AudioPlayback.enqueue().
+        const data = msg.data || {};
+        const b64 = data.audio || '';
+        if (!b64) return;
+        const sr = data.sample_rate || 24000;
+
+        // Resize playback engine if sample rate changed.
+        if (window._playback && window._playback.sampleRate !== sr) {
+          window._playback.setSampleRate(sr);
+        }
+
+        // base64 -> Uint8Array -> ArrayBuffer (for enqueue which expects Int16)
         try {
-          pendingHeader = JSON.parse(ev.data);
-        } catch {
-          pendingHeader = null;
+          const binary = atob(b64);
+          const buf = new ArrayBuffer(binary.length);
+          const view = new Uint8Array(buf);
+          for (let i = 0; i < binary.length; i++) view[i] = binary.charCodeAt(i);
+          if (window._playback) {
+            window._playback.enqueue(buf);
+          } else {
+            // Fallback: decode via AudioContext if _playback not ready yet.
+            const Ctor = window.AudioContext || window.webkitAudioContext;
+            if (Ctor) {
+              const ctx = ensureAudioCtx();
+              if (ctx) {
+                const int16 = new Int16Array(buf);
+                const float32 = new Float32Array(int16.length);
+                for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 32768;
+                const abuf = ctx.createBuffer(1, float32.length, sr);
+                abuf.getChannelData(0).set(float32);
+                const src = ctx.createBufferSource();
+                src.buffer = abuf;
+                src.connect(ctx.destination);
+                src.start();
+              }
+            }
+          }
+        } catch (err) {
+          console.error('[AudioWS] PCM decode failed:', err);
         }
         return;
       }
-      // Binary frame — the WAV bytes corresponding to the last header.
-      const header = pendingHeader;
-      pendingHeader = null;
-      playWavBlob(new Uint8Array(ev.data), header);
+
+      if (msg.type === 'bot-tts-stopped') {
+        console.log('[AudioWS] bot-tts-stopped');
+        // Playback drains naturally; nothing to force here.
+        return;
+      }
     });
 
     ws.addEventListener('close', () => {

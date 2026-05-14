@@ -1,14 +1,16 @@
-"""Unit + integration tests for the Wave 4.3 audio-subscriber registry.
+"""Unit + integration tests for the Wave 4.3 / RTVI 1.3.0 audio-subscriber registry.
 
 Covers:
   * AudioSubscriberRegistry register / unregister / count / has_subscribers
-  * emit_wav delivers header JSON + binary bytes to every subscriber
+  * emit_wav delivers RTVI frames (bot-tts-started / bot-tts-audio / bot-tts-stopped)
+  * RTVI frame shapes are spec-compliant (label, type, id, data fields)
+  * PCM extraction from WAV (44-byte header strip)
   * /v1/sessions/{id}/subscribers HTTP endpoint returns the correct shape
   * /ws/audio/{session_id} accepts a WebSocket upgrade, registers the
     subscriber for the lifetime of the connection, and unregisters on close
-  * /v1/synthesize with a session_id AND a live subscriber emits the WAV
-    over the WebSocket (via emit_wav) in addition to returning the HTTP
-    response body
+  * /v1/synthesize with a session_id AND a live subscriber emits RTVI frames
+    over the WebSocket in addition to returning the HTTP response body
+  * Pipecat-client-compatible shape assertion (RTVI 1.3.0 structure)
 
 Run with: ``.venv/bin/python -m pytest tests/test_audio_subscribers.py -v``
 """
@@ -16,7 +18,10 @@ Run with: ``.venv/bin/python -m pytest tests/test_audio_subscribers.py -v``
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
 import os
+import struct
 import sys
 from pathlib import Path
 
@@ -26,22 +31,59 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from audio_subscribers import (  # noqa: E402
     AudioSubscriberRegistry,
+    _build_rtvi_frames,
+    _extract_pcm_from_wav,
     get_default_audio_subscribers,
     reset_default_audio_subscribers,
 )
 
 # ---------------------------------------------------------------------------
-# Unit tests — AudioSubscriberRegistry
+# Helpers
+# ---------------------------------------------------------------------------
+
+_WAV_HEADER_BYTES = 44
+_FAKE_PCM = b"\x00\x01" * 100  # 200 bytes of int16 samples
+
+
+def _make_wav(pcm: bytes, sample_rate: int = 24000) -> bytes:
+    """Build a minimal valid PCM WAV around raw int16 bytes."""
+    data_size = len(pcm)
+    buf = bytearray()
+    buf += b"RIFF"
+    buf += struct.pack("<I", 36 + data_size)
+    buf += b"WAVE"
+    buf += b"fmt "
+    buf += struct.pack("<I", 16)
+    buf += struct.pack("<H", 1)
+    buf += struct.pack("<H", 1)
+    buf += struct.pack("<I", sample_rate)
+    buf += struct.pack("<I", sample_rate * 2)
+    buf += struct.pack("<H", 2)
+    buf += struct.pack("<H", 16)
+    buf += b"data"
+    buf += struct.pack("<I", data_size)
+    buf += pcm
+    return bytes(buf)
+
+
+# ---------------------------------------------------------------------------
+# Fake WebSocket
 # ---------------------------------------------------------------------------
 
 
 class _FakeWS:
-    """Minimal stand-in for fastapi.WebSocket — records sent frames."""
+    """Minimal stand-in for fastapi.WebSocket -- records sent frames."""
 
     def __init__(self) -> None:
+        self.text_sent: list[str] = []
         self.json_sent: list[dict] = []
         self.bytes_sent: list[bytes] = []
         self.closed = False
+
+    async def send_text(self, data: str) -> None:
+        if self.closed:
+            raise RuntimeError("socket closed")
+        self.text_sent.append(data)
 
     async def send_json(self, frame: dict) -> None:
         if self.closed:
@@ -52,6 +94,67 @@ class _FakeWS:
         if self.closed:
             raise RuntimeError("socket closed")
         self.bytes_sent.append(payload)
+
+
+# ---------------------------------------------------------------------------
+# Unit: PCM extraction helper
+# ---------------------------------------------------------------------------
+
+
+class TestExtractPcmFromWav:
+    def test_strips_header(self):
+        wav = _make_wav(_FAKE_PCM)
+        pcm = _extract_pcm_from_wav(wav)
+        assert pcm == _FAKE_PCM
+
+    def test_too_short_returns_empty(self):
+        assert _extract_pcm_from_wav(b"\x00" * 10) == b""
+
+    def test_exactly_header_returns_empty(self):
+        assert _extract_pcm_from_wav(b"\x00" * _WAV_HEADER_BYTES) == b""
+
+
+# ---------------------------------------------------------------------------
+# Unit: RTVI frame builder
+# ---------------------------------------------------------------------------
+
+
+class TestBuildRtviFrames:
+    def _parse_all(self, audio_b64: str, sr: int) -> list[dict]:
+        frames = _build_rtvi_frames(audio_b64=audio_b64, sample_rate=sr)
+        assert len(frames) == 3, "expect started / audio / stopped"
+        return [json.loads(f) for f in frames]
+
+    def test_label_is_rtvi_ai(self):
+        msgs = self._parse_all("AAAA", 24000)
+        for m in msgs:
+            assert m["label"] == "rtvi-ai"
+
+    def test_types_in_order(self):
+        msgs = self._parse_all("AAAA", 24000)
+        assert msgs[0]["type"] == "bot-tts-started"
+        assert msgs[1]["type"] == "bot-tts-audio"
+        assert msgs[2]["type"] == "bot-tts-stopped"
+
+    def test_ids_are_distinct_uuids(self):
+        msgs = self._parse_all("AAAA", 24000)
+        ids = [m["id"] for m in msgs]
+        assert len(set(ids)) == 3, "each frame must have a unique id"
+        for i in ids:
+            assert len(i) == 36, "id must be a UUID string"
+
+    def test_audio_data_fields(self):
+        b64 = base64.b64encode(_FAKE_PCM).decode()
+        msgs = self._parse_all(b64, 48000)
+        audio_msg = msgs[1]
+        assert audio_msg["data"]["audio"] == b64
+        assert audio_msg["data"]["sample_rate"] == 48000
+        assert audio_msg["data"]["num_channels"] == 1
+
+    def test_started_stopped_have_empty_data(self):
+        msgs = self._parse_all("AAAA", 24000)
+        assert msgs[0]["data"] == {}
+        assert msgs[2]["data"] == {}
 
 
 class TestAudioSubscriberRegistry:
@@ -103,9 +206,11 @@ class TestAudioSubscriberRegistry:
         finally:
             loop.close()
 
-    def test_emit_wav_delivers_header_and_bytes(self):
+    def test_emit_wav_delivers_rtvi_frames(self):
+        """emit_wav must send three RTVI JSON text frames (started / audio / stopped)."""
         reg = AudioSubscriberRegistry()
         loop = asyncio.new_event_loop()
+        wav = _make_wav(_FAKE_PCM, sample_rate=24000)
 
         async def run():
             ws = _FakeWS()
@@ -113,23 +218,33 @@ class TestAudioSubscriberRegistry:
             try:
                 delivered = reg.emit_wav(
                     "s1",
-                    b"fake-wav-bytes",
+                    wav,
                     job_id="job-1",
                     duration_sec=1.23,
                     sample_rate=24000,
                 )
-                # emit_wav schedules a coroutine on the loop; await it.
+                # emit_wav schedules a coroutine on the loop; give it a tick.
                 await asyncio.sleep(0.05)
                 assert delivered == 1
-                assert len(ws.json_sent) == 1
-                header = ws.json_sent[0]
-                assert header["type"] == "audio_header"
-                assert header["session_id"] == "s1"
-                assert header["job_id"] == "job-1"
-                assert header["duration_sec"] == 1.23
-                assert header["sample_rate"] == 24000
-                assert header["bytes"] == len(b"fake-wav-bytes")
-                assert ws.bytes_sent == [b"fake-wav-bytes"]
+                # Three JSON text frames; no binary frames; no json_sent frames.
+                assert len(ws.text_sent) == 3
+                assert ws.bytes_sent == []
+                assert ws.json_sent == []
+
+                frames = [json.loads(f) for f in ws.text_sent]
+                for f in frames:
+                    assert f["label"] == "rtvi-ai"
+
+                assert frames[0]["type"] == "bot-tts-started"
+                assert frames[1]["type"] == "bot-tts-audio"
+                assert frames[2]["type"] == "bot-tts-stopped"
+
+                # Verify audio payload round-trips correctly.
+                audio_data = frames[1]["data"]
+                assert audio_data["sample_rate"] == 24000
+                assert audio_data["num_channels"] == 1
+                decoded = base64.b64decode(audio_data["audio"])
+                assert decoded == _FAKE_PCM
             finally:
                 reg.unregister("s1", sub)
 
@@ -193,15 +308,57 @@ class TestSubscribersEndpoint:
 
 
 # ---------------------------------------------------------------------------
-# Integration: /v1/synthesize routes to WS subscriber
+# Pipecat / RTVI 1.3.0 compatibility assertion
 # ---------------------------------------------------------------------------
 
 
-class TestSynthesizeEmitsOverWS:
+class TestRtviCompatibility:
+    """Assert that emitted frames match the RTVI 1.3.0 spec shape.
+
+    A real Pipecat web client expects these exact field names and value types.
+    We verify the structural contract without importing the RTVI library.
+    """
+
+    def test_bot_tts_audio_spec_shape(self):
+        pcm = b"\x01\x02" * 50
+        b64 = base64.b64encode(pcm).decode()
+        frames = _build_rtvi_frames(audio_b64=b64, sample_rate=24000)
+        audio_frame = json.loads(frames[1])
+        assert audio_frame["label"] == "rtvi-ai"
+        assert audio_frame["type"] == "bot-tts-audio"
+        assert isinstance(audio_frame["id"], str) and audio_frame["id"]
+        d = audio_frame["data"]
+        assert isinstance(d["audio"], str)
+        assert isinstance(d["sample_rate"], int) and d["sample_rate"] > 0
+        assert isinstance(d["num_channels"], int) and d["num_channels"] >= 1
+        assert base64.b64decode(d["audio"]) == pcm
+
+    def test_bot_tts_started_spec_shape(self):
+        frames = _build_rtvi_frames(audio_b64="AAAA", sample_rate=24000)
+        started = json.loads(frames[0])
+        assert started["label"] == "rtvi-ai"
+        assert started["type"] == "bot-tts-started"
+        assert isinstance(started["id"], str) and started["id"]
+        assert started["data"] == {}
+
+    def test_bot_tts_stopped_spec_shape(self):
+        frames = _build_rtvi_frames(audio_b64="AAAA", sample_rate=24000)
+        stopped = json.loads(frames[2])
+        assert stopped["label"] == "rtvi-ai"
+        assert stopped["type"] == "bot-tts-stopped"
+        assert isinstance(stopped["id"], str) and stopped["id"]
+        assert stopped["data"] == {}
+
+
+# ---------------------------------------------------------------------------
+# Integration: /v1/synthesize routes RTVI frames to WS subscriber
+# ---------------------------------------------------------------------------
+
+
+class TestSynthesizeEmitsRtviOverWS:
     """When /v1/synthesize is called with a session_id whose dashboard has a
-    live /ws/audio subscription, the WAV bytes are pushed over the WebSocket
-    AND returned in the HTTP response body. Callers that skip local playback
-    when ``X-Mod3-WS-Subscribers > 0`` avoid a double-play.
+    live /ws/audio subscription, RTVI frames are pushed over the WebSocket
+    AND WAV bytes are returned in the HTTP response body.
     """
 
     @pytest.fixture
@@ -229,9 +386,9 @@ class TestSynthesizeEmitsOverWS:
 
     @pytest.mark.skipif(
         os.environ.get("SKIP_TTS_TESTS") == "1",
-        reason="loads Kokoro engine — slow; set SKIP_TTS_TESTS=1 to skip in CI",
+        reason="loads Kokoro engine -- slow; set SKIP_TTS_TESTS=1 to skip in CI",
     )
-    def test_synthesize_with_subscriber_emits_over_ws(self, client):
+    def test_synthesize_with_subscriber_emits_rtvi_over_ws(self, client):
         # Register a session and open a subscriber.
         client.post(
             "/v1/sessions/register",
@@ -242,7 +399,6 @@ class TestSynthesizeEmitsOverWS:
             },
         )
         with client.websocket_connect("/ws/audio/pytest-ws-1") as ws:
-            # Synthesize, naming the session
             r = client.post(
                 "/v1/synthesize",
                 json={
@@ -253,19 +409,25 @@ class TestSynthesizeEmitsOverWS:
             assert r.status_code == 200, r.text
             assert r.headers.get("X-Mod3-WS-Subscribers") == "1"
 
-            # The WebSocket should have received an audio_header + binary pair
-            header = ws.receive_json()
-            assert header["type"] == "audio_header"
-            assert header["session_id"] == "pytest-ws-1"
-            assert header["format"] == "wav"
-            audio = ws.receive_bytes()
-            assert audio.startswith(b"RIFF") and b"WAVE" in audio[:16]
+            # Expect three RTVI JSON text frames.
+            started_raw = ws.receive_text()
+            audio_raw = ws.receive_text()
+            stopped_raw = ws.receive_text()
+
+            started = json.loads(started_raw)
+            audio = json.loads(audio_raw)
+            stopped = json.loads(stopped_raw)
+
+            assert started["label"] == "rtvi-ai"
+            assert started["type"] == "bot-tts-started"
+            assert audio["label"] == "rtvi-ai"
+            assert audio["type"] == "bot-tts-audio"
+            assert "audio" in audio["data"]
+            assert audio["data"]["sample_rate"] > 0
+            assert stopped["label"] == "rtvi-ai"
+            assert stopped["type"] == "bot-tts-stopped"
 
     def test_synthesize_without_session_skips_ws_emit(self, client):
-        # Even without hitting Kokoro, a /v1/synthesize without session_id
-        # should report 0 WS subscribers in the response header.
-        # We don't actually need to wait for synthesis to complete — just
-        # verify the endpoint path when no subscriber exists.
         from audio_subscribers import get_default_audio_subscribers
 
         subs = get_default_audio_subscribers()
