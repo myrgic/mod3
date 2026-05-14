@@ -20,6 +20,7 @@ Tools (MCP):
 """
 # pyright: reportArgumentType=false, reportAttributeAccessIssue=false
 
+import asyncio
 import json
 import logging
 import os
@@ -1705,24 +1706,21 @@ def list_sessions() -> str:
 # Dashboard chat pub/sub — symmetric outbound channel (Path B)
 # ---------------------------------------------------------------------------
 
-import asyncio as _asyncio
-import threading as _threading
-
 # Thread-safe set of (asyncio.Queue, asyncio.AbstractEventLoop) pairs.
 # Each /ws/dashboard-chat subscriber registers a queue here; mod3_dashboard_post
 # fans out to all live queues. Registration/unregistration happen on the event
 # loop thread (WS accept/close); broadcast happens from any thread via
 # run_coroutine_threadsafe.
-_dashboard_chat_lock = _threading.Lock()
-_dashboard_chat_queues: list[tuple[_asyncio.Queue, _asyncio.AbstractEventLoop]] = []
+_dashboard_chat_lock = threading.Lock()
+_dashboard_chat_queues: list[tuple[asyncio.Queue, asyncio.AbstractEventLoop]] = []
 
 
-def _dashboard_chat_register(q: _asyncio.Queue, loop: _asyncio.AbstractEventLoop) -> None:
+def _dashboard_chat_register(q: asyncio.Queue, loop: asyncio.AbstractEventLoop) -> None:
     with _dashboard_chat_lock:
         _dashboard_chat_queues.append((q, loop))
 
 
-def _dashboard_chat_unregister(q: _asyncio.Queue) -> None:
+def _dashboard_chat_unregister(q: asyncio.Queue) -> None:
     with _dashboard_chat_lock:
         _dashboard_chat_queues[:] = [(sq, sl) for (sq, sl) in _dashboard_chat_queues if sq is not q]
 
@@ -1732,10 +1730,10 @@ def _dashboard_chat_broadcast(message: dict) -> int:
     with _dashboard_chat_lock:
         snapshot = list(_dashboard_chat_queues)
     delivered = 0
-    dead: list[_asyncio.Queue] = []
+    dead: list[asyncio.Queue] = []
     for q, loop in snapshot:
         try:
-            _asyncio.run_coroutine_threadsafe(q.put(message), loop)
+            asyncio.run_coroutine_threadsafe(q.put(message), loop)
             delivered += 1
         except Exception:  # noqa: BLE001 — dead loop, remove on next iteration
             dead.append(q)
