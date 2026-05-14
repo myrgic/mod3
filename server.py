@@ -20,6 +20,7 @@ Tools (MCP):
 """
 # pyright: reportArgumentType=false, reportAttributeAccessIssue=false
 
+import asyncio
 import json
 import logging
 import os
@@ -1697,6 +1698,96 @@ def list_sessions() -> str:
             "status": "ok",
             "sessions": registry.list_serialized(),
             "serializer": registry.serializer.snapshot(),
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
+# Dashboard chat pub/sub — symmetric outbound channel (Path B)
+# ---------------------------------------------------------------------------
+
+# Thread-safe set of (asyncio.Queue, asyncio.AbstractEventLoop) pairs.
+# Each /ws/dashboard-chat subscriber registers a queue here; mod3_dashboard_post
+# fans out to all live queues. Registration/unregistration happen on the event
+# loop thread (WS accept/close); broadcast happens from any thread via
+# run_coroutine_threadsafe.
+_dashboard_chat_lock = threading.Lock()
+_dashboard_chat_queues: list[tuple[asyncio.Queue, asyncio.AbstractEventLoop]] = []
+
+
+def _dashboard_chat_register(q: asyncio.Queue, loop: asyncio.AbstractEventLoop) -> None:
+    with _dashboard_chat_lock:
+        _dashboard_chat_queues.append((q, loop))
+
+
+def _dashboard_chat_unregister(q: asyncio.Queue) -> None:
+    with _dashboard_chat_lock:
+        _dashboard_chat_queues[:] = [(sq, sl) for (sq, sl) in _dashboard_chat_queues if sq is not q]
+
+
+def _dashboard_chat_broadcast(message: dict) -> int:
+    """Fan the message out to all registered subscribers. Returns delivery count."""
+    with _dashboard_chat_lock:
+        snapshot = list(_dashboard_chat_queues)
+    delivered = 0
+    dead: list[asyncio.Queue] = []
+    for q, loop in snapshot:
+        try:
+            asyncio.run_coroutine_threadsafe(q.put(message), loop)
+            delivered += 1
+        except Exception:  # noqa: BLE001 — dead loop, remove on next iteration
+            dead.append(q)
+    if dead:
+        with _dashboard_chat_lock:
+            _dashboard_chat_queues[:] = [(sq, sl) for (sq, sl) in _dashboard_chat_queues if sq not in dead]
+    return delivered
+
+
+@mcp.tool(
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    }
+)
+def mod3_dashboard_post(
+    text: str,
+    session_id: str = "",
+    role: str = "assistant",
+) -> str:
+    """Send response text from Claude Code to the mod3 dashboard chat panel.
+
+    This is the symmetric outbound path (Path B): while speak() routes text
+    through TTS to the speaker, mod3_dashboard_post routes text directly to
+    the dashboard's visual chat panel so the user can read Claude's reply in
+    real time without waiting for audio synthesis.
+
+    All connected /ws/dashboard-chat subscribers receive a JSON frame:
+      {"type": "chat", "role": <role>, "text": <text>, "session_id": <sid>}
+
+    Args:
+        text: The message text to display in the chat panel.
+        session_id: Optional session identifier for multi-session tracking.
+                    Defaults to empty string (global broadcast).
+        role: Speaker role tag rendered in the UI. Defaults to "assistant".
+    """
+    if not text.strip():
+        return json.dumps({"status": "error", "error": "text must not be empty"})
+
+    message = {
+        "type": "chat",
+        "role": role,
+        "text": text,
+        "session_id": session_id or "",
+    }
+    delivered = _dashboard_chat_broadcast(message)
+    return json.dumps(
+        {
+            "status": "ok",
+            "delivered_to": delivered,
+            "role": role,
+            "text_preview": text[:80],
         }
     )
 

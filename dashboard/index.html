@@ -1905,5 +1905,66 @@ chatInput.addEventListener('input', () => {
   }
 })();
 </script>
+
+<script>
+/**
+ * Path B — Symmetric dashboard chat channel (/ws/dashboard-chat).
+ *
+ * Subscribes to mod3_dashboard_post broadcasts from Claude Code and appends
+ * them to the shared chat panel. This closes the response loop: Claude's
+ * text replies appear in the dashboard without requiring TTS synthesis.
+ *
+ * Wire contract (server -> client JSON text frame):
+ *   {"type": "chat", "role": "assistant"|"user", "text": "...", "session_id": "..."}
+ *
+ * Reconnects with exponential backoff on close/error. Does not send to the
+ * server (inbound text path is a follow-up).
+ */
+(function setupDashboardChatSubscriber() {
+  const scheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const url = `${scheme}//${window.location.host}/ws/dashboard-chat`;
+  let reconnectDelay = 1500;
+  let ws = null;
+
+  function connect() {
+    try {
+      ws = new WebSocket(url);
+
+      ws.addEventListener('open', () => {
+        reconnectDelay = 1500;
+        console.log('[DashChat] Connected to /ws/dashboard-chat');
+      });
+
+      ws.addEventListener('message', (event) => {
+        let msg;
+        try { msg = JSON.parse(event.data); } catch { return; }
+        if (!msg || msg.type !== 'chat') return;
+
+        const role = (msg.role === 'user') ? 'user' : 'assistant';
+        const text = msg.text || '';
+        const sessionHint = msg.session_id ? `mcp · ${msg.session_id.slice(0, 8)}` : 'mcp';
+        if (text) appendMessage(role, text, sessionHint);
+      });
+
+      ws.addEventListener('close', () => {
+        console.log('[DashChat] Closed, reconnecting in', reconnectDelay + 'ms');
+        ws = null;
+        setTimeout(connect, reconnectDelay);
+        reconnectDelay = Math.min(reconnectDelay * 2, 30000);
+      });
+
+      ws.addEventListener('error', () => {
+        // close event fires after error; reconnect happens there.
+      });
+    } catch (err) {
+      console.warn('[DashChat] Connect failed:', err);
+      setTimeout(connect, reconnectDelay);
+      reconnectDelay = Math.min(reconnectDelay * 2, 30000);
+    }
+  }
+
+  connect();
+})();
+</script>
 </body>
 </html>
