@@ -171,48 +171,9 @@
     50% { opacity: 0.3; }
   }
 
-  /* Cycle Trace panel (bottom drawer) */
-  #trace-panel {
-    position: fixed; left: 0; right: 0; bottom: 0;
-    background: var(--surface); border-top: 1px solid var(--border);
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    z-index: 20; max-height: 40vh; display: flex; flex-direction: column;
-    transition: max-height 0.2s ease;
-  }
-  #trace-panel.collapsed { max-height: 32px; }
-  #trace-panel .trace-header {
-    display: flex; align-items: center; gap: 8px;
-    padding: 6px 16px; border-bottom: 1px solid var(--border);
-    background: var(--bg); cursor: pointer; user-select: none;
-    font-size: 0.75rem; color: var(--muted); text-transform: uppercase;
-    letter-spacing: 0.5px; flex-shrink: 0; height: 32px;
-  }
-  #trace-panel .trace-header .trace-title { font-weight: 600; }
-  #trace-panel .trace-header .trace-toggle {
-    margin-left: auto; font-size: 0.7rem; color: var(--muted);
-  }
-  #trace-panel.collapsed #trace-entries { display: none; }
-  #trace-entries {
-    overflow-y: auto; padding: 4px 0; flex: 1; min-height: 0;
-    font-size: 0.75rem; line-height: 1.4;
-  }
-  .trace-entry {
-    display: flex; gap: 8px; align-items: baseline;
-    padding: 2px 16px; border-bottom: 1px solid rgba(48,54,61,0.3);
-    white-space: nowrap; overflow: hidden;
-  }
-  .trace-entry:hover { background: rgba(88,166,255,0.05); }
-  .trace-time { color: var(--muted); flex-shrink: 0; font-variant-numeric: tabular-nums; }
-  .trace-source { color: var(--muted); flex-shrink: 0; font-size: 0.7rem; }
-  .trace-kind {
-    flex-shrink: 0; font-size: 0.65rem; padding: 1px 6px;
-    border: 1px solid var(--border); border-radius: 3px;
-    text-transform: uppercase; letter-spacing: 0.5px;
-  }
-  .trace-summary { color: var(--text); overflow: hidden; text-overflow: ellipsis; }
-
-  /* Leave room at the bottom so the drawer doesn't cover the input */
-  body { padding-bottom: 32px; }
+  /* (Cycle Trace drawer removed 2026-05-13: was an observability artifact wired
+     through transport.js as a side-channel. Operator anti-pattern per the
+     2026-05-13 mod3 UX audit. trace_event frames are no longer rendered.) */
 
   /* Participant panel (ADR-082 / Wave 4) — live session roster. Renders as a
      collapsible drawer on the right side of the main pane. */
@@ -432,15 +393,6 @@
   </div>
 
   <div class="hint">For voice, use headphones. Speak naturally — the system detects when you start and stop. Speak during playback to interrupt.</div>
-</div>
-
-<!-- Cycle Trace drawer (ADR-083 trace_event frames) -->
-<div id="trace-panel" class="collapsed">
-  <div class="trace-header" id="trace-toggle" title="Toggle Cycle Trace panel">
-    <span class="trace-title">Cycle Trace</span>
-    <span class="trace-toggle" id="trace-toggle-icon">&#9650;</span>
-  </div>
-  <div id="trace-entries"></div>
 </div>
 
 <script>
@@ -755,9 +707,11 @@ function finalizeAssistant(suffix) {
 async function sendTextMessage(text) {
   appendMessage('user', text, 'text');
 
-  // ACP path (default): use the ACP transport unless ?legacy=1 is in the URL.
-  const useLegacy = new URLSearchParams(window.location.search).get('legacy') === '1';
-  if (!useLegacy && window._acpTransport) {
+  // Default chat path: /ws/chat (typed via schemas.ws_chat — the working wire today).
+  // ACP transport is opt-in via ?acp=1 while the server-side prompt routing
+  // gets properly wired into AgentLoop. Both endpoints are live on the daemon.
+  const useAcp = new URLSearchParams(window.location.search).get('acp') === '1';
+  if (useAcp && window._acpTransport) {
     try {
       const acpT = window._acpTransport;
       if (!acpT.connected) {
@@ -767,11 +721,11 @@ async function sendTextMessage(text) {
         return;
       }
     } catch (err) {
-      console.error('[ACP] sessionPrompt failed, falling back to legacy:', err);
+      console.error('[ACP] sessionPrompt failed, falling back to /ws/chat:', err);
     }
   }
 
-  // Legacy /ws/chat fallback path (always available when ?legacy=1 or ACP unavailable).
+  // /ws/chat default path — schema-validated via schemas.ws_chat models.
   if (_transport && _transport.connected) {
     _transport.sendControl({ type: "text_message", text: text });
   } else {
@@ -1274,7 +1228,6 @@ chatInput.addEventListener('input', () => {
 <script src="/dashboard/playback.js?v=2"></script>
 <script src="/dashboard/transport.js?v=2"></script>
 <script src="/dashboard/acp-transport.js?v=1"></script>
-<script src="/dashboard/trace.js?v=1" defer></script>
 
 <script>
 // Auto-connect WebSocket on page load (text chat works without mic)
@@ -1457,9 +1410,9 @@ chatInput.addEventListener('input', () => {
  * renderer used by the /ws/chat path, so the chat UI is transport-agnostic.
  */
 (function setupAcpTransport() {
-  const useLegacy = new URLSearchParams(window.location.search).get('legacy') === '1';
-  if (useLegacy) {
-    console.log('[ACP] Legacy mode (?legacy=1) -- ACP transport disabled');
+  const useAcp = new URLSearchParams(window.location.search).get('acp') === '1';
+  if (!useAcp) {
+    console.log('[ACP] /ws/chat default mode -- ACP transport disabled (add ?acp=1 to enable)');
     return;
   }
 

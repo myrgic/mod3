@@ -61,15 +61,8 @@ class VoiceTransport {
   }
 
   _dispatch(msg) {
-    // Trace events — cosmetic, never blocks audio/text rendering
-    if (msg.type === "trace_event") {
-      try {
-        if (window.tracePanel && msg.event) window.tracePanel.render(msg.event);
-      } catch (e) {
-        console.warn("[WS] trace_event render failed:", e);
-      }
-      return;
-    }
+    // (trace_event side-channel dispatch removed 2026-05-13 — the Cycle Trace
+    // drawer was a side-channel UX artifact, not part of the chat data plane.)
 
     // Handle base64 audio message — decode and route to onAudio
     if (msg.type === "audio" && msg.data) {
