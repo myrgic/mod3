@@ -65,6 +65,21 @@ def _bus_send_url() -> str:
     return f"{_kernel_base()}/v1/bus/send"
 
 
+def _response_bus_stream_url() -> str:
+    """Build the per-bus SSE URL for ``bus_dashboard_response``.
+
+    The kernel exposes two SSE endpoints:
+      - ``/v1/events/stream``       -- the kernel ledger (heartbeats, sessions, etc.)
+      - ``/v1/bus/<id>/stream``     -- per-bus event stream from BusSessionManager
+
+    The response bridge MUST use the per-bus endpoint because
+    ``enginePublishDashboardResponse`` writes to the BusSessionManager
+    (``bus_dashboard_response``), which is NOT wired into the kernel ledger.
+    Subscribing to ``/v1/events/stream`` therefore never delivers agent responses.
+    """
+    return f"{_kernel_base()}/v1/bus/{RESPONSE_BUS_ID}/stream"
+
+
 # Back-compat module attribute. Use ``_bus_send_url()`` for runtime resolution.
 BUS_SEND_URL = _bus_send_url()
 
@@ -199,6 +214,33 @@ def _extract_session_id(payload: dict) -> Optional[str]:
     return None
 
 
+def _unwrap_bus_block_payload(payload: dict) -> dict:
+    """Extract the inner ``payload`` map from a bus SSE BusBlock envelope.
+
+    The per-bus SSE endpoint (``/v1/bus/<id>/stream``) emits frames where
+    the ``data`` field is the full ``BusBlock`` struct::
+
+        {
+          "id": "...", "type": "agent_response", "timestamp": "...",
+          "data": {
+            "v": 2, "bus_id": "...", "seq": N, ...,
+            "payload": { "text": "...", "session_id": "...", ... }
+          }
+        }
+
+    After ``bus_bridge._parse_event`` runs, ``env.payload`` == the ``BusBlock``
+    dict.  The actual application payload lives at ``BusBlock["payload"]``.
+    This function unwraps that inner dict if present; otherwise it returns the
+    original dict unchanged so callers work on both BusBlock and flat shapes.
+    """
+    if not isinstance(payload, dict):
+        return payload
+    inner = payload.get("payload")
+    if isinstance(inner, dict):
+        return inner
+    return payload
+
+
 def _extract_response_text(payload: dict) -> Optional[str]:
     """Dig the assistant reply out of the bus event payload.
 
@@ -259,7 +301,11 @@ async def run_response_bridge(subscriber: KernelBusSubscriber) -> None:
     async for env in subscriber.stream():
         if env.kind == "connected":
             continue
-        text = _extract_response_text(env.payload)
+        # Bus SSE envelopes from /v1/bus/<id>/stream carry a full BusBlock in
+        # env.payload; the actual application data lives at BusBlock["payload"].
+        # Unwrap that inner dict before extracting text / session_id.
+        app_payload = _unwrap_bus_block_payload(env.payload)
+        text = _extract_response_text(app_payload)
         if not text:
             logger.debug(
                 "cogos-agent: skip event with no text kind=%s id=%s",
@@ -274,7 +320,7 @@ async def run_response_bridge(subscriber: KernelBusSubscriber) -> None:
                 env.event_id,
             )
             first_event_logged = True
-        session_id = _extract_session_id(env.payload)
+        session_id = _extract_session_id(app_payload)
 
         # ACP session route: if an ACP listener is registered for this
         # session, deliver the response there instead of broadcasting via
@@ -335,7 +381,11 @@ async def start_response_bridge(
         setattr(app_state, "cogos_agent_task", None)
         return
 
-    resolved_url = url or default_stream_url()
+    # Use the per-bus SSE endpoint, not the ledger events stream.
+    # enginePublishDashboardResponse writes to BusSessionManager, which is
+    # NOT wired into the kernel ledger.  The per-bus stream endpoint at
+    # /v1/bus/<id>/stream is the only path that delivers these events.
+    resolved_url = url or _response_bus_stream_url()
     subscriber = KernelBusSubscriber(
         url=resolved_url,
         bus_filter=RESPONSE_BUS_ID,
