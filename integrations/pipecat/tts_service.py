@@ -104,10 +104,13 @@ class Mod3TTSService(TTSService):
         """Synthesize ``text`` and yield Pipecat audio frames.
 
         Yields a ``TTSStartedFrame``, one ``TTSAudioRawFrame`` per engine
-        chunk, then a ``TTSStoppedFrame``.
+        chunk as it is produced, then a ``TTSStoppedFrame``.
 
-        The engine call is synchronous (mlx_audio runs on the main thread);
-        we run it in a thread executor to avoid blocking the event loop.
+        The engine call is synchronous (mlx_audio runs on the main thread).
+        We iterate the generator one chunk at a time via
+        ``loop.run_in_executor`` so each chunk yields back to the event loop
+        promptly — preserving streaming latency rather than buffering the
+        whole utterance before the first frame.
         """
         import asyncio
 
@@ -115,13 +118,13 @@ class Mod3TTSService(TTSService):
 
         loop = asyncio.get_event_loop()
 
-        def _generate():
-            """Collect all chunks synchronously in a thread.
-
-            Calls the module-level ``generate_audio`` reference so tests can
-            replace it via ``patch("integrations.pipecat.tts_service.generate_audio")``.
-            """
-            return list(
+        # Materialize the synchronous generator inside the executor — calling
+        # ``generate_audio`` may itself do non-trivial work (model warm-up,
+        # voice profile resolution) that we don't want on the event loop.
+        # The ``iter`` call here is cheap; the cost is in the subsequent
+        # ``next`` invocations below.
+        def _make_generator():
+            return iter(
                 generate_audio(
                     text,
                     voice=self._voice,
@@ -132,9 +135,18 @@ class Mod3TTSService(TTSService):
                 )
             )
 
-        chunks = await loop.run_in_executor(None, _generate)
+        gen = await loop.run_in_executor(None, _make_generator)
 
-        for chunk in chunks:
+        _SENTINEL = object()
+        while True:
+            # One executor hop per chunk. Awaiting between chunks lets other
+            # Pipecat pipeline tasks (downstream playback, interruption
+            # detection) run between frames instead of starving until the
+            # whole utterance is generated.
+            chunk = await loop.run_in_executor(None, next, gen, _SENTINEL)
+            if chunk is _SENTINEL:
+                break
+
             samples = chunk.samples
             if samples is None or len(samples) == 0:
                 continue
