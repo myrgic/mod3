@@ -13,6 +13,12 @@ Endpoints:
   GET  /capabilities   — machine-readable capability manifest
   WS   /ws/chat        — dashboard voice/text chat
   GET  /dashboard      — dashboard UI
+  POST /v1/sessions/{id}/seats             — register a channel-client seat
+  DELETE /v1/sessions/{id}/seats/{seat_id} — revoke a seat
+  GET  /v1/sessions/{id}/seats/{seat_id}/events — SSE event stream for a seat
+  GET  /v1/sessions/{id}/seats             — list seats in a session
+  POST /v1/sessions/{id}/messages          — fan dashboard text to all seats
+  POST /v1/dashboard-chat                  — REST dashboard-chat (for channel clients)
 """
 
 import asyncio
@@ -946,6 +952,240 @@ def session_subscribers(session_id: str):
         "subscribed": count > 0,
         "count": count,
     }
+
+
+# ---------------------------------------------------------------------------
+# Channel seats — register / revoke / SSE stream / dashboard fan-out
+# (supports channel_client.py seat-based session attachment)
+# ---------------------------------------------------------------------------
+
+
+@app.post("/v1/sessions/{session_id}/seats")
+async def seat_register(session_id: str, request: Request):
+    """Register a channel-client seat in *session_id*.
+
+    Body (JSON):
+      {
+        "client_type": "claude-code-channel" | "generic",
+        "device_uuid": "<persistent uuid>"
+      }
+
+    Returns:
+      {
+        "seat_id": "...",
+        "session_id": "...",
+        "auth_token": "<bearer token echo for confirmation>"
+      }
+
+    Auto-creates the session bucket if it does not exist.
+    Access policy is enforced via access.py when that module is available.
+    """
+    from seats import get_seat_registry
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    client_type = body.get("client_type", "generic")
+    device_uuid = body.get("device_uuid", "")
+
+    # Optional: enforce access policy from access.py if available
+    try:
+        import access as _access
+
+        peer = request.client.host if request.client else "127.0.0.1"
+        identifier = device_uuid or peer
+        allowed = _access.is_allowed(identifier, peer)
+        if not allowed:
+            # Emit pairing request event to any existing seats in this session
+            registry = get_seat_registry()
+            code = _access.add_pending(identifier)
+            registry.fan_out(
+                session_id,
+                {
+                    "type": "pairing_request",
+                    "identifier": identifier,
+                    "code": code,
+                },
+            )
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "error": "access denied",
+                    "pairing_code": code,
+                    "message": f"Run `/mod3:access pair {code}` to approve this device",
+                },
+            )
+    except ImportError:
+        pass  # access.py not yet ported — allow all (localhost-only in dev)
+
+    registry = get_seat_registry()
+    seat = registry.register(
+        session_id=session_id,
+        client_type=client_type,
+        device_uuid=device_uuid,
+    )
+    logger.info("Seat registered: %s in session %s", seat.seat_id, session_id)
+    return {
+        "seat_id": seat.seat_id,
+        "session_id": seat.session_id,
+        "client_type": seat.client_type,
+    }
+
+
+@app.delete("/v1/sessions/{session_id}/seats/{seat_id}")
+def seat_revoke(session_id: str, seat_id: str):
+    """Revoke a seat — closes its SSE stream and removes it from the registry."""
+    from seats import get_seat_registry
+
+    registry = get_seat_registry()
+    removed = registry.revoke(session_id, seat_id)
+    if not removed:
+        return JSONResponse(
+            status_code=404,
+            content={"error": f"seat '{seat_id}' not found in session '{session_id}'"},
+        )
+    return {"status": "revoked", "seat_id": seat_id, "session_id": session_id}
+
+
+@app.get("/v1/sessions/{session_id}/seats/{seat_id}/events")
+async def seat_events(session_id: str, seat_id: str):
+    """SSE stream of events for a channel-client seat.
+
+    Streams ``text/event-stream`` until the seat is revoked or the client
+    disconnects.  Events follow the shape:
+
+      event: user_message
+      data: {"type":"user_message","content":"<text>","input_type":"text"}
+
+      event: pairing_request
+      data: {"type":"pairing_request","identifier":"<uuid>","code":"abcde"}
+    """
+    from fastapi.responses import StreamingResponse
+
+    from seats import get_seat_registry, sse_stream
+
+    registry = get_seat_registry()
+    seat = registry.get(session_id, seat_id)
+    if seat is None:
+        return JSONResponse(
+            status_code=404,
+            content={"error": f"seat '{seat_id}' not found in session '{session_id}'"},
+        )
+
+    async def _generate():
+        async for chunk in sse_stream(seat):
+            yield chunk
+
+    return StreamingResponse(
+        _generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.get("/v1/sessions/{session_id}/seats")
+def seat_list(session_id: str):
+    """List all seats currently attached to *session_id*."""
+    from seats import get_seat_registry
+
+    registry = get_seat_registry()
+    return {
+        "session_id": session_id,
+        "seats": registry.list_session_seats(session_id),
+    }
+
+
+@app.post("/v1/sessions/{session_id}/messages")
+async def session_message(session_id: str, request: Request):
+    """Fan a dashboard text message to all seats in *session_id*.
+
+    Body (JSON):
+      {
+        "content": "<text>",
+        "input_type": "text" | "voice",
+        "role": "user"
+      }
+
+    Returns the number of seats that received the event.
+    """
+    from seats import get_seat_registry
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    content = body.get("content", "")
+    input_type = body.get("input_type", "text")
+    role = body.get("role", "user")
+
+    registry = get_seat_registry()
+    count = registry.fan_out(
+        session_id,
+        {
+            "type": "user_message",
+            "content": content,
+            "input_type": input_type,
+            "role": role,
+        },
+    )
+    return {"status": "ok", "session_id": session_id, "seats_notified": count}
+
+
+@app.post("/v1/dashboard-chat")
+async def dashboard_chat_post(request: Request):
+    """REST alternative to the WebSocket dashboard-chat path.
+
+    Used by channel_client.py's mod3_dashboard_post tool.  Broadcasts
+    the message to all connected WebSocket dashboard-chat subscribers AND
+    fans it out to any channel seats in the same session.
+
+    Body (JSON):
+      {
+        "text": "<message>",
+        "role": "assistant" | "user",
+        "session_id": "<id>",
+        "seat_id": "<id>"
+      }
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "invalid JSON"})
+
+    text = body.get("text", "")
+    role = body.get("role", "assistant")
+    session_id = body.get("session_id")
+
+    # Fan to WebSocket dashboard-chat subscribers (existing server.py mechanism)
+    try:
+        from server import _dashboard_chat_broadcast
+
+        _dashboard_chat_broadcast({"type": "chat", "role": role, "text": text, "session_id": session_id})
+    except (ImportError, AttributeError):
+        logger.debug("_dashboard_chat_broadcast not available (server.py not loaded or renamed)")
+
+    # Also fan to any seat SSE streams in the session
+    if session_id:
+        from seats import get_seat_registry
+
+        registry = get_seat_registry()
+        registry.fan_out(
+            session_id,
+            {
+                "type": "assistant_message",
+                "content": text,
+                "role": role,
+                "session_id": session_id,
+            },
+        )
+
+    return {"status": "ok"}
 
 
 @app.get("/health")

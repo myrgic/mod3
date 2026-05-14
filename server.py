@@ -7,7 +7,9 @@ Voice presets are resolved to the correct engine automatically.
 Interfaces:
   HTTP (--http):  REST API + HTTP-MCP at /mcp (canonical transport)
   HTTP (default): same as --http when invoked without flags (stdio deprecated)
-  stdio (--all, --channel, no-args): deprecated — see issue #11 and README
+  stdio (--all, no-args): deprecated — see issue #11 and README
+
+Channel client: use clients/channel_client.py (separate stdio process) — see CHANNELS.md.
 
 
 Tools (MCP):
@@ -33,17 +35,13 @@ from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Any
 
-import anyio
 import numpy as np
 from mcp.server.fastmcp import FastMCP
-from mcp.server.stdio import stdio_server
-from mcp.shared.message import SessionMessage
-from mcp.types import JSONRPCMessage, JSONRPCNotification
 
 from bus import ModalityBus
 from modality import ModalityType, ModuleStatus
 from modules.voice import PlaceholderDecoder, VoiceModule
-from pipeline_state import InterruptInfo, PipelineState
+from pipeline_state import PipelineState
 from session_registry import (
     ResolvedOutputDevice,
     get_default_registry,
@@ -237,147 +235,6 @@ mcp = FastMCP(
     # internal route must live at "/" so external /mcp requests resolve.
     streamable_http_path="/",
 )
-
-# ---------------------------------------------------------------------------
-# Claude Code channel capabilities
-# ---------------------------------------------------------------------------
-
-_CHANNEL_CAPABILITIES: dict[str, dict[str, Any]] = {
-    "claude/channel": {},
-    "claude/channel/permission": {},
-}
-
-# Store the write stream for emitting channel notifications outside request context
-_write_stream = None
-_write_stream_lock = threading.Lock()
-
-
-async def emit_channel_event(content: str, meta: dict[str, str] | None = None):
-    """Emit a channel notification to Claude Code.
-
-    Sends a ``notifications/claude/channel`` JSON-RPC notification over the
-    active MCP session.  Can be called from tool handlers or background tasks
-    while the server is running.
-
-    Args:
-        content: The textual content to relay (e.g. transcribed speech).
-        meta: Optional string-keyed metadata dict (speaker, confidence, etc.).
-    """
-    with _write_stream_lock:
-        ws = _write_stream
-    if ws is None:
-        raise RuntimeError("MCP session not active — cannot emit channel event")
-
-    notification = JSONRPCNotification(
-        jsonrpc="2.0",
-        method="notifications/claude/channel",
-        params={"content": content, "meta": meta or {}},
-    )
-    await ws.send(SessionMessage(message=JSONRPCMessage(notification)))
-
-
-async def emit_permission_verdict(request_id: str, behavior: str):
-    """Emit a permission verdict notification to Claude Code.
-
-    Sends a ``notifications/claude/channel/permission`` JSON-RPC notification
-    with a verdict (allow/deny) for a previously received permission request.
-
-    Args:
-        request_id: The 5-letter request ID from the original permission request.
-        behavior: ``"allow"`` or ``"deny"``.
-    """
-    with _write_stream_lock:
-        ws = _write_stream
-    if ws is None:
-        raise RuntimeError("MCP session not active — cannot emit permission verdict")
-
-    notification = JSONRPCNotification(
-        jsonrpc="2.0",
-        method="notifications/claude/channel/permission",
-        params={"request_id": request_id, "behavior": behavior},
-    )
-    await ws.send(SessionMessage(message=JSONRPCMessage(notification)))
-    logger.info("permission verdict sent: request_id=%s behavior=%s", request_id, behavior)
-
-
-def _handle_permission_request(params: dict[str, Any]) -> None:
-    """Handle an incoming permission request by speaking it aloud via TTS.
-
-    Called when the read-stream interceptor detects a
-    ``notifications/claude/channel/permission_request`` notification from
-    Claude Code.  Formats a spoken prompt and plays it through the default
-    voice so the user can respond verbally.
-
-    Args:
-        params: The notification params containing ``request_id``,
-                ``tool_name``, ``description``, and ``input_preview``.
-    """
-    request_id = params.get("request_id", "unknown")
-    tool_name = params.get("tool_name", "a tool")
-    description = params.get("description", "")
-
-    # Build a concise spoken prompt
-    prompt_parts = [f"Claude wants to run {tool_name}"]
-    if description:
-        prompt_parts.append(f": {description}")
-    prompt_parts.append(f". Say yes {request_id} or no {request_id}.")
-    prompt_text = "".join(prompt_parts)
-
-    logger.info("permission request received: id=%s tool=%s", request_id, tool_name)
-    _start_speech(prompt_text, voice="bm_lewis", speed=1.25)
-
-
-# Patch run_stdio_async to inject experimental capabilities and capture the
-# write stream so emit_channel_event can send notifications at any time.
-_original_run_stdio = mcp.run_stdio_async
-
-_PERMISSION_REQUEST_METHOD = "notifications/claude/channel/permission_request"
-
-
-async def _patched_run_stdio():
-    global _write_stream
-    async with stdio_server() as (read_stream, write_stream):
-        with _write_stream_lock:
-            _write_stream = write_stream
-
-        # Wrap the read stream to intercept permission_request notifications.
-        # These use a custom method that the MCP session cannot parse into a
-        # typed ClientNotification, so we handle them here and forward
-        # everything else to the MCP server unchanged.
-        send_inner, receive_inner = anyio.create_memory_object_stream[SessionMessage | Exception](0)
-
-        async def _filter_read_stream():
-            async with read_stream, send_inner:
-                async for message in read_stream:
-                    if isinstance(message, Exception):
-                        await send_inner.send(message)
-                        continue
-
-                    root = message.message.root
-                    if isinstance(root, JSONRPCNotification) and root.method == _PERMISSION_REQUEST_METHOD:
-                        # Handle permission request — speak it via TTS
-                        _handle_permission_request(root.params or {})
-                        continue
-
-                    # All other messages pass through to the MCP server
-                    await send_inner.send(message)
-
-        try:
-            async with anyio.create_task_group() as tg:
-                tg.start_soon(_filter_read_stream)
-                await mcp._mcp_server.run(
-                    receive_inner,
-                    write_stream,
-                    mcp._mcp_server.create_initialization_options(
-                        experimental_capabilities=_CHANNEL_CAPABILITIES,
-                    ),
-                )
-        finally:
-            with _write_stream_lock:
-                _write_stream = None
-
-
-mcp.run_stdio_async = _patched_run_stdio
 
 # ---------------------------------------------------------------------------
 # Reflex arc — shared pipeline state
@@ -637,23 +494,6 @@ _bargein_registry.start_from_env()
 
 _bargein_thread = threading.Thread(target=_bargein_watcher, daemon=True)
 _bargein_thread.start()
-
-
-async def _emit_interruption(info: InterruptInfo):
-    """Emit a channel notification when playback is interrupted.
-
-    Called by the inbound pipeline (VAD reflex) after pipeline_state.interrupt()
-    returns an InterruptInfo.  Notifies Claude Code that speech was cut short.
-    """
-    await emit_channel_event(
-        content=f"[interrupted — speech halted at '{info.delivered_text}']",
-        meta={
-            "source": "mod3-voice",
-            "type": "interruption",
-            "spoken_pct": str(round(info.spoken_pct, 2)),
-            "reason": info.reason,
-        },
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -1933,11 +1773,6 @@ if __name__ == "__main__":
         action="store_true",
         help="Run both MCP (stdio) and HTTP [deprecated — use HTTP-MCP: python server.py --http, then connect via /mcp]",
     )
-    parser.add_argument(
-        "--channel",
-        action="store_true",
-        help="Run as channel server with voice input [deprecated — use HTTP-MCP: python server.py --http, then connect via /mcp]",
-    )
     parser.add_argument("--dashboard", action="store_true", help="Run HTTP API with voice/text dashboard (no MCP)")
     parser.add_argument("--port", type=int, default=7860, help="HTTP port (default: 7860)")
     parser.add_argument("--host", type=str, default="0.0.0.0", help="HTTP bind address")
@@ -1972,21 +1807,6 @@ if __name__ == "__main__":
         logging.basicConfig(level=logging.INFO)
         logger.info("Starting dashboard mode (WhisperDecoder enabled)")
         _run_http(host=args.host, port=args.port)
-    elif args.channel:
-        # Channel mode: MCP on stdio + inbound voice pipeline
-        warnings.warn(_STDIO_DEPRECATION_MSG, DeprecationWarning, stacklevel=2)
-        from bus import ModalityBus
-        from inbound import InboundPipeline
-        from modules.voice import VoiceModule
-
-        bus = ModalityBus()
-        bus.register(VoiceModule())
-        inbound = InboundPipeline(bus=bus, pipeline_state=pipeline_state)
-        inbound.start()
-        try:
-            mcp.run()  # MCP on stdio with channel capabilities
-        finally:
-            inbound.stop()
     else:
         warnings.warn(_STDIO_DEPRECATION_MSG, DeprecationWarning, stacklevel=2)
         mcp.run()
