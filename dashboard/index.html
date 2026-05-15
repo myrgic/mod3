@@ -364,26 +364,7 @@
         <div class="form-group">
           <label>Voice</label>
           <select id="voice-voice">
-            <option value="">Default</option>
-            <optgroup label="Kokoro">
-              <option value="bm_lewis" selected>bm_lewis</option>
-              <option value="af_heart">af_heart</option>
-              <option value="af_bella">af_bella</option>
-              <option value="af_nicole">af_nicole</option>
-              <option value="af_sarah">af_sarah</option>
-              <option value="af_sky">af_sky</option>
-              <option value="am_adam">am_adam</option>
-              <option value="am_michael">am_michael</option>
-              <option value="bf_emma">bf_emma</option>
-              <option value="bf_isabella">bf_isabella</option>
-              <option value="bm_george">bm_george</option>
-            </optgroup>
-            <optgroup label="Voxtral">
-              <option value="casual_female">casual_female</option>
-              <option value="casual_male">casual_male</option>
-              <option value="neutral_female">neutral_female</option>
-              <option value="neutral_male">neutral_male</option>
-            </optgroup>
+            <option value="">Loading voices…</option>
           </select>
         </div>
         <div class="form-group">
@@ -738,6 +719,111 @@ function saveTransportPref(val) {
   el.addEventListener('change', () => {
     try { localStorage.setItem(SETTINGS_KEYS.ttsVoice, el.value); } catch {}
   });
+})();
+
+// Dynamic voice dropdown — fetch /v1/voices and populate grouped by engine.
+// The dashboard model selector (voice-model) maps to engine names; when
+// "chatterbox" is selected we show chatterbox-turbo voices because that is
+// the engine that holds the cloned voice profiles. All other model values
+// match engine names 1:1. Falls back to flat list if the fetch fails.
+(function loadDashboardVoices() {
+  const voiceSel = document.getElementById('voice-voice');
+  const modelSel = document.getElementById('voice-model');
+  if (!voiceSel || !modelSel) return;
+
+  // Dashboard model value → engine key in /v1/voices response.
+  // 'chatterbox' in the model picker targets the turbo clone engine.
+  const MODEL_TO_ENGINE = {
+    kokoro:      'kokoro',
+    voxtral:     'voxtral',
+    chatterbox:  'chatterbox-turbo',
+    spark:       'spark',
+  };
+
+  let _voiceEngines = {};
+
+  function populateForEngine(engineKey) {
+    const savedVoice = (() => { try { return localStorage.getItem(SETTINGS_KEYS.ttsVoice); } catch { return null; } })();
+    const cfg = _voiceEngines[engineKey];
+    voiceSel.innerHTML = '';
+
+    if (!cfg) {
+      // Engine not in response (not loaded yet) — show a placeholder but don't hide the select.
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = '(no voices for this engine)';
+      voiceSel.appendChild(opt);
+      return;
+    }
+
+    const voices    = cfg.voices || [];
+    const customSet = new Set(cfg.custom_voices || []);
+
+    if (customSet.size === 0) {
+      voices.forEach(v => {
+        const opt = document.createElement('option');
+        opt.value = v;
+        opt.textContent = v;
+        voiceSel.appendChild(opt);
+      });
+    } else {
+      const builtins = voices.filter(v => !customSet.has(v));
+      const customs  = voices.filter(v =>  customSet.has(v));
+      if (builtins.length > 0) {
+        const grp = document.createElement('optgroup');
+        grp.label = 'Built-in voices';
+        builtins.forEach(v => {
+          const opt = document.createElement('option');
+          opt.value = v;
+          opt.textContent = v;
+          grp.appendChild(opt);
+        });
+        voiceSel.appendChild(grp);
+      }
+      if (customs.length > 0) {
+        const grp = document.createElement('optgroup');
+        grp.label = 'Custom (cloned) voices';
+        customs.forEach(v => {
+          const opt = document.createElement('option');
+          opt.value = v;
+          opt.textContent = v;
+          grp.appendChild(opt);
+        });
+        voiceSel.appendChild(grp);
+      }
+    }
+
+    // Restore persisted voice if it exists in the new list, else default.
+    if (savedVoice) {
+      const match = [...voiceSel.options].find(o => o.value === savedVoice);
+      if (match) {
+        voiceSel.value = savedVoice;
+        return;
+      }
+    }
+    voiceSel.value = cfg.default_voice || voices[0] || '';
+  }
+
+  async function loadVoices() {
+    try {
+      const r = await fetch('/v1/voices');
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const data = await r.json();
+      _voiceEngines = data.engines || {};
+      populateForEngine(MODEL_TO_ENGINE[modelSel.value] || modelSel.value);
+    } catch (err) {
+      console.warn('[dashboard] Failed to load voices from /v1/voices:', err.message);
+      // Leave the select as-is so the user can still type a voice name if needed.
+      voiceSel.innerHTML = '<option value="">Error loading voices</option>';
+    }
+  }
+
+  // Re-populate when the TTS model changes.
+  modelSel.addEventListener('change', () => {
+    populateForEngine(MODEL_TO_ENGINE[modelSel.value] || modelSel.value);
+  });
+
+  loadVoices();
 })();
 
 // Persist speed select
