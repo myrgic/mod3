@@ -959,7 +959,7 @@ window.__renderSessionsSidebar = function(sessions) {
                     kind === 'agent' ? 'kernel' : kind;
     const displayId = pid.length > 20 ? pid.slice(0, 18) + '…' : pid;
     return (
-      '<div class="sidebar-session-row' + (isSelf ? ' active' : '') + '" data-sid="' + sid + '">' +
+      '<div class="sidebar-session-row' + (isSelf ? ' active' : '') + '" data-sid="' + sid + '" tabindex="0" role="button" aria-label="Select session ' + sid + '">' +
         '<span class="sidebar-session-dot' + (isSelf ? ' active' : '') + '"></span>' +
         '<div class="sidebar-session-info">' +
           '<div class="sidebar-session-id">' + displayId + '</div>' +
@@ -972,6 +972,59 @@ window.__renderSessionsSidebar = function(sessions) {
     );
   }).join('');
 };
+
+// --- Session sidebar click delegation ---
+// Clicking a session row makes it the "active" session: highlights it in the
+// sidebar and persists the selection in localStorage so refresh restores it.
+// Future: loading that session's chat history into the main pane.
+(function initSidebarClickDelegation() {
+  const SESSION_KEY = 'mod3.sessionId';
+
+  function getContainer() { return document.getElementById('sessions-sidebar-content'); }
+
+  function setActiveRow(sid) {
+    const container = getContainer();
+    if (!container) return;
+    container.querySelectorAll('.sidebar-session-row').forEach(row => {
+      row.classList.toggle('active', row.dataset.sid === sid);
+    });
+  }
+
+  function activateRow(row) {
+    const sid = row.dataset.sid;
+    if (!sid) return;
+    setActiveRow(sid);
+    // Persist the user's explicit session choice
+    try {
+      const saved = JSON.parse(localStorage.getItem(SESSION_KEY)) || {};
+      localStorage.setItem(SESSION_KEY, JSON.stringify({ ...saved, session_id: sid }));
+    } catch {}
+    // Emit a custom event so other panels can react
+    document.dispatchEvent(new CustomEvent('mod3:session-selected', { detail: { session_id: sid } }));
+  }
+
+  function wireContainer(container) {
+    container.addEventListener('click', e => {
+      const row = e.target.closest('.sidebar-session-row');
+      if (row) activateRow(row);
+    });
+    container.addEventListener('keydown', e => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      const row = e.target.closest('.sidebar-session-row');
+      if (row) { e.preventDefault(); activateRow(row); }
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => {
+      const c = getContainer();
+      if (c) wireContainer(c);
+    });
+  } else {
+    const c = getContainer();
+    if (c) wireContainer(c);
+  }
+})();
 
 // --- Substrate visibility panel (debug tab) ---
 // Polls when debug tab is active; exposed as window.__refreshOpsPanel.
