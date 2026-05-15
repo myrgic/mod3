@@ -414,10 +414,14 @@ class VoiceEncoder(Encoder):
         voice = intent.metadata.get("voice", self.default_voice)
         speed = intent.metadata.get("speed", self.default_speed)
         emotion = intent.metadata.get("emotion", 0.5)
-        # Phase-timing identifiers — channel_id and message_id are passed
-        # through intent.metadata by the agent loop when available.
+        # Phase-timing identifiers — session_id, message_id, and trace_id are
+        # passed through intent.metadata by the agent loop. trace_id correlates
+        # tts_synthesize and tts_playback_start with the other phase events for
+        # this turn (agent_dispatch, provider_call, tool_execute, stt_capture,
+        # stt_transcribe) in the trace panel.
         _session_id = intent.metadata.get("session_id", "")
         _msg_id = intent.metadata.get("message_id", "")
+        _trace_id: str | None = intent.metadata.get("trace_id") or None
 
         self._state.status = ModuleStatus.ENCODING
         self._state.current_text = intent.content[:100]
@@ -449,6 +453,7 @@ class VoiceEncoder(Encoder):
                     duration_ms=int((time.perf_counter() - _synth_t0) * 1000),
                     ok=False,
                     error=_tts_synth_err,
+                    trace_id=_trace_id,
                 )
             except Exception:  # noqa: BLE001
                 pass
@@ -463,6 +468,7 @@ class VoiceEncoder(Encoder):
                 session_id=_session_id,
                 message_id=_msg_id,
                 duration_ms=_synth_ms,
+                trace_id=_trace_id,
             )
         except Exception:  # noqa: BLE001
             pass
@@ -482,6 +488,7 @@ class VoiceEncoder(Encoder):
                 session_id=_session_id,
                 message_id=_msg_id,
                 duration_ms=max(0, _playback_start_ms),
+                trace_id=_trace_id,
             )
         except Exception:  # noqa: BLE001
             pass
