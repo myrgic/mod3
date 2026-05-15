@@ -441,6 +441,7 @@ class VoiceEncoder(Encoder):
             # Emit failure phase event before re-raising
             try:
                 from chat_flow_log import get_chat_flow_log
+
                 get_chat_flow_log().emit_phase(
                     phase_name="tts_synthesize",
                     session_id=_session_id,
@@ -456,6 +457,7 @@ class VoiceEncoder(Encoder):
         _synth_ms = int((time.perf_counter() - _synth_t0) * 1000)
         try:
             from chat_flow_log import get_chat_flow_log
+
             get_chat_flow_log().emit_phase(
                 phase_name="tts_synthesize",
                 session_id=_session_id,
@@ -474,6 +476,7 @@ class VoiceEncoder(Encoder):
         _playback_start_ms = int((time.perf_counter() - _synth_t0) * 1000) - _synth_ms
         try:
             from chat_flow_log import get_chat_flow_log
+
             get_chat_flow_log().emit_phase(
                 phase_name="tts_playback_start",
                 session_id=_session_id,

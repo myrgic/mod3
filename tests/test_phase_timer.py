@@ -226,10 +226,7 @@ class TestQueryWildcard:
         log.emit_phase("stt_capture", "s", "m", 10)
         log.emit_phase("provider_call", "s", "m", 500)
         log.emit_phase("tts_synthesize", "s", "m", 300)
-        log.emit(
-            "chat.message_received",
-            "s", "m", "ws", [], "hello", "inbound"
-        )
+        log.emit("chat.message_received", "s", "m", "ws", [], "hello", "inbound")
 
         phase_events = log.query(event_type="chat.phase.*", limit=20)
         assert len(phase_events) == 3

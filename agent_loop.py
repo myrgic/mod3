@@ -204,6 +204,7 @@ class AgentLoop:
         _agent_dispatch_ms = int((time.perf_counter() - t_start) * 1000)
         try:
             from chat_flow_log import get_chat_flow_log
+
             get_chat_flow_log().emit_phase(
                 phase_name="agent_dispatch",
                 session_id=_session_id,
@@ -301,6 +302,7 @@ class AgentLoop:
         _turn_total_ms = int((time.perf_counter() - _turn_t0) * 1000)
         try:
             from chat_flow_log import get_chat_flow_log
+
             get_chat_flow_log().emit_phase(
                 phase_name="turn_total",
                 session_id=_session_id,
