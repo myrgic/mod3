@@ -31,6 +31,10 @@ class InterruptInfo:
     delivered_text: str  # text that was actually spoken
     full_text: str  # original full text
     reason: str  # "vad_reflex", "manual_stop", etc.
+    # Bargein position tracking — populated when samples_played / total_samples
+    # are known at interrupt time (i.e. when the adaptive player tracks position).
+    bargein_position_ms: float | None = None  # wall-time ms into the utterance
+    bargein_position_text_offset: int | None = None  # character offset in full_text
 
 
 class PipelineState:
@@ -100,7 +104,9 @@ class PipelineState:
             # Snapshot state before we tear it down
             player = self._player
             text = self._text
-            pct = self._samples_played / self._total_samples if self._total_samples > 0 else 0.0
+            samples_played = self._samples_played
+            total_samples = self._total_samples
+            pct = samples_played / total_samples if total_samples > 0 else 0.0
 
             # Clear speaking state immediately (inside lock)
             self._speaking = False
@@ -111,12 +117,30 @@ class PipelineState:
         if player is not None:
             player.flush()
 
+        # Compute bargein position metrics.
+        # bargein_position_ms: samples_played at a standard sample rate (24 kHz for
+        # Kokoro; 16 kHz for some Whisper paths). We use the player's sample_rate
+        # attribute when available, falling back to 24000 (Kokoro default).
+        bargein_ms: float | None = None
+        bargein_text_offset: int | None = None
+        try:
+            sample_rate = getattr(player, "sample_rate", None) or 24000
+            if total_samples > 0:
+                bargein_ms = round((samples_played / sample_rate) * 1000, 1)
+                # Character offset: proportional estimate from delivered_text length
+                delivered = self.delivered_text(text, pct)
+                bargein_text_offset = len(delivered)
+        except Exception:
+            pass  # best-effort; never block the interrupt path
+
         info = InterruptInfo(
             timestamp=time.time(),
             spoken_pct=pct,
             delivered_text=self.delivered_text(text, pct),
             full_text=text,
             reason=reason,
+            bargein_position_ms=bargein_ms,
+            bargein_position_text_offset=bargein_text_offset,
         )
 
         with self._lock:
