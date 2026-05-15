@@ -51,12 +51,19 @@ def handle_bargein_start(
     pipeline_state: PipelineState,
     source: str,
     metadata: dict | None = None,
+    session_id: str = "",
+    message_id: str = "",
 ) -> InterruptInfo | None:
     """Attempt to interrupt in-progress TTS playback because the user began speaking.
 
     Returns the ``InterruptInfo`` if playback was actually halted, or ``None``
     if nothing was speaking (or another process owns the speech — only the
     file watcher can handle that via the cross-process lock).
+
+    When playback is halted, emits a ``bargein.event`` to the chat_flow_log
+    capturing the structural split between solidified (actually played) and
+    speculative (unsaid) content. This event feeds the trace panel's hatched
+    bar and the speculative-output block in the kernel turn record.
     """
     if not pipeline_state.is_speaking:
         return None
@@ -68,6 +75,33 @@ def handle_bargein_start(
             info.spoken_pct * 100,
             f" meta={metadata}" if metadata else "",
         )
+        # Emit bargein.event to chat_flow_log for observability and
+        # speculative-output block construction.
+        try:
+            from chat_flow_log import get_chat_flow_log
+
+            speculative = ""
+            if info.full_text and info.delivered_text:
+                # Speculative = everything after the delivered prefix
+                delivered = info.delivered_text
+                if info.full_text.startswith(delivered):
+                    speculative = info.full_text[len(delivered) :].strip()
+                else:
+                    # Fallback: use pct estimate
+                    cut = int(info.spoken_pct * len(info.full_text))
+                    speculative = info.full_text[cut:].strip()
+
+            get_chat_flow_log().emit_bargein(
+                session_id=session_id or (metadata or {}).get("session_id", ""),
+                message_id=message_id or (metadata or {}).get("message_id", ""),
+                original_text=info.full_text or "",
+                text_actually_played=info.delivered_text or "",
+                text_speculative=speculative,
+                bargein_position_ms=info.bargein_position_ms,
+                bargein_position_text_offset=info.bargein_position_text_offset,
+            )
+        except Exception as _e:  # noqa: BLE001
+            log.debug("handle_bargein_start: failed to emit bargein.event: %s", _e)
     return info
 
 

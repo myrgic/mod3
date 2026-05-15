@@ -113,6 +113,12 @@ CHAT_PHASE_TURN_TOTAL = "chat.phase.turn_total"
 # Prefix used for wildcard matching in queries
 CHAT_PHASE_PREFIX = "chat.phase."
 
+# Bargein event type — emitted when TTS playback is interrupted mid-stream.
+# Shape: {ts, event_type, session_id, message_id, original_text,
+#          text_actually_played, text_speculative,
+#          bargein_position_ms, bargein_position_text_offset}
+CHAT_BARGEIN_EVENT = "bargein.event"
+
 # ---------------------------------------------------------------------------
 # File rotation constants
 # ---------------------------------------------------------------------------
@@ -214,6 +220,67 @@ class ChatFlowLog:
             )
         except Exception as exc:  # noqa: BLE001
             _logger.debug("chat_flow_log.emit_phase failed: %s", exc)
+            return {}
+
+    def emit_bargein(
+        self,
+        session_id: str,
+        message_id: str,
+        original_text: str,
+        text_actually_played: str,
+        text_speculative: str,
+        bargein_position_ms: float | None = None,
+        bargein_position_text_offset: int | None = None,
+    ) -> dict[str, Any]:
+        """Record a bargein.event — TTS playback interrupted mid-utterance.
+
+        Captures the structural split between what the user heard (solidified)
+        and what was generated but not delivered (speculative). This is the
+        data source for the speculative-output block in the turn record and
+        for the hatched bar in the trace panel.
+
+        Args:
+            session_id:                  Channel / session identifier.
+            message_id:                  Per-message UUID (may be empty).
+            original_text:               Full text that was being spoken.
+            text_actually_played:        Portion delivered before bargein.
+            text_speculative:            Remaining suffix (unsaid content).
+            bargein_position_ms:         Wall-time ms into the utterance at interrupt.
+            bargein_position_text_offset: Character offset in original_text at interrupt.
+        """
+        try:
+            ts = datetime.now(timezone.utc).isoformat()
+            event: dict[str, Any] = {
+                "ts": ts,
+                "event_type": CHAT_BARGEIN_EVENT,
+                "session_id": session_id or "",
+                "message_id": message_id or "",
+                "original_text": original_text or "",
+                "text_actually_played": text_actually_played or "",
+                "text_speculative": text_speculative or "",
+            }
+            if bargein_position_ms is not None:
+                event["bargein_position_ms"] = bargein_position_ms
+            if bargein_position_text_offset is not None:
+                event["bargein_position_text_offset"] = bargein_position_text_offset
+
+            with self._lock:
+                self._ring.append(event)
+
+            _logger.info(
+                "[bargein.event] session=%s msg=%s played=%d/%d chars ms=%.1f",
+                session_id,
+                message_id,
+                len(text_actually_played),
+                len(original_text),
+                bargein_position_ms or 0.0,
+            )
+
+            self._append_to_file(event)
+            self._notify_subscribers(event)
+            return event
+        except Exception as exc:  # noqa: BLE001
+            _logger.debug("chat_flow_log.emit_bargein failed: %s", exc)
             return {}
 
     def _emit_phase_inner(
