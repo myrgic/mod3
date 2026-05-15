@@ -32,11 +32,13 @@ logger = logging.getLogger("mod3.agent_loop")
 # Base system prompt — kernel context is appended dynamically
 _BASE_SYSTEM_PROMPT = (
     "You are Cog, a voice assistant running on Mod³ (Apple Silicon, fully local). "
-    "You respond using tool calls. Use speak() for conversational voice responses — "
-    "keep them concise, 1-3 sentences. Use send_text() only when the content is "
-    "better read than heard (code, lists, links, structured data). "
-    "No markdown in speak() text. Speak naturally. "
-    "If the user asks something you can't do, say so briefly."
+    "You respond using tool calls. Use output(text=..., mode='audio') for conversational "
+    "voice responses — keep them concise, 1-3 sentences. Use output(text=..., mode='text') "
+    "only when the content is better read than heard (code, lists, links, structured data). "
+    "Use output(text=..., mode='both') when a response deserves both voice and a visual record. "
+    "No markdown in audio-mode output text. Speak naturally. "
+    "If the user asks something you can't do, say so briefly. "
+    "Legacy tools speak() and send_text() still work but are deprecated."
 )
 
 # CogOS kernel endpoint for context enrichment
@@ -247,7 +249,41 @@ class AgentLoop:
         assistant_parts: list[str] = []
 
         for tc in response.tool_calls:
-            if tc.name == "speak":
+            # Unified output() tool — mode dispatch: "audio", "text", "both"
+            # Deprecated speak() and send_text() are handled below for backwards compat.
+            if tc.name == "output":
+                text = tc.arguments.get("text", "")
+                mode = tc.arguments.get("mode", "audio")
+                if text:
+                    assistant_parts.append(text)
+                    async with phase_timer("tool_execute", _session_id, _msg_id):
+                        # Text path: send to dashboard chat panel
+                        if mode in ("text", "both"):
+                            if self._channel_ref:
+                                await self._channel_ref.send_response_text(text)
+                        # Audio path: route through bus → VoiceEncoder → TTS
+                        if mode in ("audio", "both"):
+                            intent = CognitiveIntent(
+                                modality=ModalityType.VOICE,
+                                content=text,
+                                target_channel=self.channel_id,
+                                metadata={
+                                    "voice": tc.arguments.get("voice")
+                                    or (
+                                        self._channel_ref.config.get("voice", "bm_lewis")
+                                        if self._channel_ref
+                                        else "bm_lewis"
+                                    ),
+                                    "speed": tc.arguments.get("speed")
+                                    or (self._channel_ref.config.get("speed", 1.25) if self._channel_ref else 1.25),
+                                    "session_id": _session_id,
+                                    "message_id": _msg_id,
+                                },
+                            )
+                            self.bus.act(intent, channel=self.channel_id)
+
+            elif tc.name == "speak":
+                # DEPRECATED: use output(text=..., mode="audio") instead
                 text = tc.arguments.get("text", "")
                 if text:
                     assistant_parts.append(text)
@@ -276,7 +312,8 @@ class AgentLoop:
                         self.bus.act(intent, channel=self.channel_id)
 
             elif tc.name == "send_text":
-                text = tc.arguments.get("text", "")
+                # DEPRECATED: use output(text=..., mode="text") instead
+                text = tc.arguments.get("content", "") or tc.arguments.get("text", "")
                 if text:
                     assistant_parts.append(text)
                     async with phase_timer("tool_execute", _session_id, _msg_id):
@@ -366,11 +403,15 @@ class AgentLoop:
 
             t_ms = (time.perf_counter() - t_start) * 1000
 
-            # Extract response text
+            # Extract response text from tool calls (output, speak, send_text)
             response_text = ""
             for tc in response.tool_calls:
-                if tc.name == "speak":
+                if tc.name == "output":
                     response_text += tc.arguments.get("text", "") + " "
+                elif tc.name == "speak":
+                    response_text += tc.arguments.get("text", "") + " "
+                elif tc.name == "send_text":
+                    response_text += (tc.arguments.get("content") or tc.arguments.get("text", "")) + " "
             if not response_text and response.text:
                 response_text = response.text
 

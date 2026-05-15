@@ -1591,6 +1591,123 @@ def _dashboard_chat_broadcast(message: dict) -> int:
         "openWorldHint": False,
     }
 )
+def output(
+    text: str,
+    mode: str = "audio",
+    stream: bool = True,
+    session_id: str = "",
+    voice: str = "bm_lewis",
+    speed: float = 1.25,
+    emotion: float = 0.5,
+) -> str:
+    """Unified output tool — route text to audio, text chat, or both.
+
+    Use this as the primary output surface. Pick mode based on content type:
+      - mode="audio"  — synthesize and play via TTS (conversational replies)
+      - mode="text"   — send to the dashboard chat panel (code, lists, links)
+      - mode="both"   — TTS audio AND dashboard chat bubble simultaneously
+
+    Args:
+        text:       The content to output. Required.
+        mode:       Delivery mode: "audio" | "text" | "both". Default "audio".
+        stream:     For audio: stream chunks as generated (True, lower latency)
+                    or generate fully then play (False, better prosody). Default True.
+        session_id: Optional ADR-082 session id for session-scoped routing.
+        voice:      TTS voice preset (audio modes only). Default "bm_lewis".
+        speed:      TTS speed multiplier (engines that support it). Default 1.25.
+        emotion:    TTS emotion/exaggeration 0.0–1.0 (Chatterbox only). Default 0.5.
+
+    Returns a JSON object with "status" and mode-specific fields.
+    When mode="both", includes both "audio" and "text" result blocks.
+    """
+    if not text.strip():
+        return json.dumps({"status": "error", "error": "text must not be empty"})
+
+    valid_modes = {"audio", "text", "both"}
+    if mode not in valid_modes:
+        return json.dumps({"status": "error", "error": f"mode must be one of {sorted(valid_modes)}, got {mode!r}"})
+
+    results: dict = {"status": "ok", "mode": mode}
+
+    # ── Text path ─────────────────────────────────────────────────────────────
+    if mode in ("text", "both"):
+        message = {
+            "type": "chat",
+            "role": "assistant",
+            "text": text,
+            "session_id": session_id or "",
+        }
+        delivered = _dashboard_chat_broadcast(message)
+        results["text"] = {
+            "status": "ok",
+            "delivered_to": delivered,
+            "text_preview": text[:80],
+        }
+
+    # ── Audio path ────────────────────────────────────────────────────────────
+    if mode in ("audio", "both"):
+        # Reuse the speak() logic directly so session routing, hold-detection,
+        # and queue state all apply identically.
+        speak_raw = speak(
+            text=text,
+            voice=voice,
+            stream=stream,
+            speed=speed,
+            emotion=emotion,
+            session_id=session_id,
+        )
+        try:
+            speak_result = json.loads(speak_raw)
+        except Exception:
+            speak_result = {"raw": speak_raw}
+        results["audio"] = speak_result
+
+        # Propagate error status if audio failed and we're not also delivering text
+        if speak_result.get("status") == "error" and mode == "audio":
+            results["status"] = "error"
+            results["error"] = speak_result.get("error", "audio error")
+
+    return json.dumps(results)
+
+
+@mcp.tool(
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    }
+)
+def send_text(
+    content: str,
+    session_id: str = "",
+    role: str = "assistant",
+) -> str:
+    """[DEPRECATED] Send text to the dashboard chat panel.
+
+    Deprecated: use output(text=..., mode="text") instead.
+    This alias is preserved for backwards compatibility and will be removed
+    in a future release.
+    """
+    import warnings as _warnings
+
+    _warnings.warn(
+        "send_text() is deprecated — use output(text=..., mode='text') instead",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    logger.warning("send_text() called — deprecated, use output(text=..., mode='text')")
+    return mod3_dashboard_post(text=content, session_id=session_id, role=role)
+
+
+@mcp.tool(
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    }
+)
 def mod3_dashboard_post(
     text: str,
     session_id: str = "",
