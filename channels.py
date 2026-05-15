@@ -120,16 +120,16 @@ def shutdown_stt_executor(wait: bool = True) -> None:
 # near-miss cases can be studied from the service log.
 # ---------------------------------------------------------------------------
 
-_DEDUP_SIMILARITY_THRESHOLD = 0.95   # chunk similarity threshold (Strategy A)
-_DEDUP_SENTENCE_THRESHOLD = 0.85     # sentence-level threshold (Strategy C)
+_DEDUP_SIMILARITY_THRESHOLD = 0.95  # chunk similarity threshold (Strategy A)
+_DEDUP_SENTENCE_THRESHOLD = 0.85  # sentence-level threshold (Strategy C)
 # Minimum unit size guards.  Low values let us catch single-token repetitions
 # ("okay okay", "OK OK OK OK") while exact-equality in _near_equal ensures we
 # don't false-positive on legitimate short phrases.
-_DEDUP_MIN_UNIT_CHARS = 4            # minimum repeating unit character length
-_DEDUP_MIN_UNIT_WORDS = 1            # minimum repeating unit word count
+_DEDUP_MIN_UNIT_CHARS = 4  # minimum repeating unit character length
+_DEDUP_MIN_UNIT_WORDS = 1  # minimum repeating unit word count
 # Near-match floor: segments shorter than this use exact equality only (no
 # fuzzy matching), preventing false positives on short but valid sentences.
-_DEDUP_NEAR_MATCH_FLOOR = 10        # chars below which only exact match applies
+_DEDUP_NEAR_MATCH_FLOOR = 10  # chars below which only exact match applies
 
 
 def _char_similarity(a: str, b: str) -> float:
@@ -167,7 +167,7 @@ def _near_equal(a: str, b: str, threshold: float) -> bool:
 # Strategy C — sentence-level dedup
 # ---------------------------------------------------------------------------
 
-_SENTENCE_SPLIT_RE = re.compile(r'(?<=[.!?])\s+')
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 
 
 def _strategy_c(text: str) -> str | None:
@@ -208,6 +208,7 @@ def _strategy_c(text: str) -> str | None:
 # Strategy A — N-way equal-chunk dedup
 # ---------------------------------------------------------------------------
 
+
 def _strategy_a(text: str) -> str | None:
     """Split text into N equal chunks; if all N are near-identical, keep first.
 
@@ -223,15 +224,15 @@ def _strategy_a(text: str) -> str | None:
         if n_total < n * _DEDUP_MIN_UNIT_CHARS:
             continue
         chunk_size = n_total // n
-        chunks = [stripped[i * chunk_size:(i + 1) * chunk_size].strip() for i in range(n)]
+        chunks = [stripped[i * chunk_size : (i + 1) * chunk_size].strip() for i in range(n)]
         # Include any remainder in the last chunk.
         if n_total % n:
-            chunks[-1] = stripped[(n - 1) * chunk_size:].strip()
+            chunks[-1] = stripped[(n - 1) * chunk_size :].strip()
 
-        if all(
-            _near_equal(chunks[0], chunks[i], _DEDUP_SIMILARITY_THRESHOLD)
-            for i in range(1, n)
-        ) and _word_count(chunks[0]) >= _DEDUP_MIN_UNIT_WORDS:
+        if (
+            all(_near_equal(chunks[0], chunks[i], _DEDUP_SIMILARITY_THRESHOLD) for i in range(1, n))
+            and _word_count(chunks[0]) >= _DEDUP_MIN_UNIT_WORDS
+        ):
             logger.info(
                 "STT dedup [A/%d-way]: kept first of %d chunks, result: %r",
                 n,
@@ -246,6 +247,7 @@ def _strategy_a(text: str) -> str | None:
 # ---------------------------------------------------------------------------
 # Strategy B — longest-repeating-suffix via Z-function (O(n))
 # ---------------------------------------------------------------------------
+
 
 def _z_function(s: str) -> list[int]:
     """Compute the Z-array for string s.
@@ -325,6 +327,7 @@ def _strategy_b(text: str) -> str | None:
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
+
 
 def _dedup_repeated_transcript(text: str) -> str:
     """Return text with trailing repeated content removed.

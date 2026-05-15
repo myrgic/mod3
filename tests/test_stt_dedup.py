@@ -201,15 +201,9 @@ def test_performance_5000_chars():
     Uses a hash-derived pseudo-random word stream so no two consecutive sentences
     or global repetition patterns can trigger any dedup strategy.
     """
-    words = [
-        hashlib.md5(f"w{i}".encode()).hexdigest()[:6]
-        for i in range(200)
-    ]
+    words = [hashlib.md5(f"w{i}".encode()).hexdigest()[:6] for i in range(200)]
     # Join into sentences of 8 words each — each sentence is unique.
-    sentences = [
-        " ".join(words[i:i + 8]) + "."
-        for i in range(0, len(words) - 8, 8)
-    ]
+    sentences = [" ".join(words[i : i + 8]) + "." for i in range(0, len(words) - 8, 8)]
     long_text = " ".join(sentences)[:5000]
 
     start = time.perf_counter()
