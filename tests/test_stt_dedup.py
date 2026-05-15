@@ -18,7 +18,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from channels import _dedup_repeated_transcript  # noqa: E402
 
-
 # ---------------------------------------------------------------------------
 # Exact-match cases
 # ---------------------------------------------------------------------------
