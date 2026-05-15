@@ -36,6 +36,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 from pydantic import TypeAdapter, ValidationError
 
 from bus import ModalityBus
+from chat_flow_log import CHAT_MESSAGE_RECEIVED, CHAT_RESPONSE_GENERATED, get_chat_flow_log
 from modality import CognitiveEvent, EncodedOutput, ModalityType
 from modules.voice import WhisperDecoder
 from pipeline_state import PipelineState
@@ -467,6 +468,20 @@ class BrowserChannel:
 
     async def _process_text(self, text: str) -> None:
         """Text message → CognitiveEvent → agent loop."""
+        _msg_id = str(uuid.uuid4())[:8]
+        try:
+            get_chat_flow_log().emit(
+                CHAT_MESSAGE_RECEIVED,
+                self.channel_id,
+                _msg_id,
+                "ws",
+                [],
+                text,
+                "inbound",
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
         event = CognitiveEvent(
             modality=ModalityType.TEXT,
             content=text,
@@ -477,6 +492,19 @@ class BrowserChannel:
         await self.ws.send_json(frame.model_dump(exclude_none=True))
         if self._on_event:
             await self._on_event(event)
+
+        try:
+            get_chat_flow_log().emit(
+                CHAT_RESPONSE_GENERATED,
+                self.channel_id,
+                _msg_id,
+                "ws",
+                [],
+                "",
+                "outbound",
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
     async def _handle_interrupt(self) -> None:
         """Interrupt in-flight speech."""
