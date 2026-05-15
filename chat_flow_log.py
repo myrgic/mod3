@@ -19,6 +19,10 @@ Usage
     )
     events = log.query(session_id="cs-abc123", limit=20)
 
+    # Phase timing — wrap a call site with phase_timer:
+    async with phase_timer("stt_transcribe", session_id, msg_id):
+        result = await loop.run_in_executor(_STT_EXECUTOR, _transcribe)
+
 Event schema
 ------------
 Each event is a dict with:
@@ -32,6 +36,17 @@ Each event is a dict with:
   content_preview— first 80 chars of content (truncated)
   direction      — "inbound" | "outbound"
   error          — error string if event_type is chat.error, else absent
+
+Phase events (chat.phase.*) schema
+-----------------------------------
+  ts             — ISO 8601 timestamp (UTC, at phase-end)
+  event_type     — "chat.phase.<name>"
+  session_id     — mod3 session / channel identifier
+  message_id     — per-message UUID (short) — may be empty on voice path
+  phase_name     — short name (e.g. "stt_transcribe")
+  duration_ms    — wall-time for the phase in milliseconds (int)
+  ok             — true | false
+  error          — error string if ok=false (absent otherwise)
 
 SSE live-tail
 -------------
@@ -47,10 +62,13 @@ import hashlib
 import json
 import logging
 import threading
+import time
+import types
 from collections import deque
+from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, AsyncIterator, Iterator
 
 _logger = logging.getLogger("mod3.chat_flow")
 
@@ -77,6 +95,24 @@ _VALID_EVENT_TYPES = frozenset(
         CHAT_ERROR,
     }
 )
+
+# ---------------------------------------------------------------------------
+# Phase-timing event-type constants
+# ---------------------------------------------------------------------------
+# Voice path phases
+CHAT_PHASE_STT_CAPTURE = "chat.phase.stt_capture"
+CHAT_PHASE_STT_TRANSCRIBE = "chat.phase.stt_transcribe"
+CHAT_PHASE_TTS_SYNTHESIZE = "chat.phase.tts_synthesize"
+CHAT_PHASE_TTS_PLAYBACK_START = "chat.phase.tts_playback_start"
+
+# Both paths
+CHAT_PHASE_AGENT_DISPATCH = "chat.phase.agent_dispatch"
+CHAT_PHASE_PROVIDER_CALL = "chat.phase.provider_call"
+CHAT_PHASE_TOOL_EXECUTE = "chat.phase.tool_execute"
+CHAT_PHASE_TURN_TOTAL = "chat.phase.turn_total"
+
+# Prefix used for wildcard matching in queries
+CHAT_PHASE_PREFIX = "chat.phase."
 
 # ---------------------------------------------------------------------------
 # File rotation constants
@@ -135,6 +171,83 @@ class ChatFlowLog:
         except Exception as exc:  # noqa: BLE001
             _logger.debug("chat_flow_log.emit failed: %s", exc)
             return {}
+
+    def emit_phase(
+        self,
+        phase_name: str,
+        session_id: str,
+        message_id: str,
+        duration_ms: int,
+        *,
+        ok: bool = True,
+        error: str | None = None,
+    ) -> dict[str, Any]:
+        """Record a phase-timing event.  Never raises.
+
+        Phase events are stored in the same ring buffer as chat-flow events and
+        are served by the same /v1/logs/chat-flow endpoint.  They are queryable
+        with event_type="chat.phase.<name>" or by prefix using the wildcard
+        support in ChatFlowLog.query (pass a comma-separated list or prefix).
+
+        Args:
+            phase_name:   Short name such as "stt_transcribe" or "provider_call".
+            session_id:   Channel / session identifier for the turn.
+            message_id:   Per-message UUID (may be empty string on voice path).
+            duration_ms:  Wall-time for the phase in milliseconds.
+            ok:           False if the phase raised an exception.
+            error:        Exception message when ok=False.
+        """
+        try:
+            return self._emit_phase_inner(
+                phase_name=phase_name,
+                session_id=session_id,
+                message_id=message_id,
+                duration_ms=duration_ms,
+                ok=ok,
+                error=error,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _logger.debug("chat_flow_log.emit_phase failed: %s", exc)
+            return {}
+
+    def _emit_phase_inner(
+        self,
+        phase_name: str,
+        session_id: str,
+        message_id: str,
+        duration_ms: int,
+        ok: bool,
+        error: str | None,
+    ) -> dict[str, Any]:
+        ts = datetime.now(timezone.utc).isoformat()
+        event_type = f"{CHAT_PHASE_PREFIX}{phase_name}"
+        event: dict[str, Any] = {
+            "ts": ts,
+            "event_type": event_type,
+            "session_id": session_id or "",
+            "message_id": message_id or "",
+            "phase_name": phase_name,
+            "duration_ms": int(duration_ms),
+            "ok": ok,
+        }
+        if not ok and error is not None:
+            event["error"] = error
+
+        with self._lock:
+            self._ring.append(event)
+
+        _logger.debug(
+            "[%s] session=%s msg=%s duration_ms=%d ok=%s",
+            event_type,
+            session_id,
+            message_id,
+            duration_ms,
+            ok,
+        )
+
+        self._append_to_file(event)
+        self._notify_subscribers(event)
+        return event
 
     def _emit_inner(
         self,
@@ -212,9 +325,21 @@ class ChatFlowLog:
             except ValueError:
                 pass  # bad since — ignore filter
 
-        event_types: set[str] | None = None
+        # Parse event_type filter — supports exact names, comma-separated lists,
+        # and wildcard suffixes (e.g. "chat.phase.*" matches all phase events).
+        event_type_exact: set[str] | None = None
+        event_type_prefixes: list[str] | None = None
         if event_type:
-            event_types = {t.strip() for t in event_type.split(",") if t.strip()}
+            raw_types = [t.strip() for t in event_type.split(",") if t.strip()]
+            exact_set: set[str] = set()
+            prefix_list: list[str] = []
+            for t in raw_types:
+                if t.endswith("*"):
+                    prefix_list.append(t[:-1])  # strip the trailing '*'
+                else:
+                    exact_set.add(t)
+            event_type_exact = exact_set or None
+            event_type_prefixes = prefix_list or None
 
         with self._lock:
             snapshot = list(self._ring)
@@ -223,8 +348,14 @@ class ChatFlowLog:
         for ev in reversed(snapshot):  # newest first
             if session_id and ev.get("session_id") != session_id:
                 continue
-            if event_types and ev.get("event_type") not in event_types:
-                continue
+            if event_type_exact is not None or event_type_prefixes is not None:
+                ev_type = ev.get("event_type", "")
+                exact_match = event_type_exact is not None and ev_type in event_type_exact
+                prefix_match = event_type_prefixes is not None and any(
+                    ev_type.startswith(p) for p in event_type_prefixes
+                )
+                if not exact_match and not prefix_match:
+                    continue
             if since_ts and ev.get("ts", "") < since_ts:
                 continue
             results.append(ev)
@@ -305,3 +436,109 @@ def get_chat_flow_log() -> ChatFlowLog:
             if _singleton is None:
                 _singleton = ChatFlowLog()
     return _singleton
+
+
+# ---------------------------------------------------------------------------
+# phase_timer — context managers for call-site instrumentation
+# ---------------------------------------------------------------------------
+#
+# Usage (sync):
+#     with phase_timer("provider_call", session_id, msg_id):
+#         result = some_sync_call()
+#
+# Usage (async):
+#     async with phase_timer("stt_transcribe", session_id, msg_id):
+#         result = await loop.run_in_executor(_STT_EXECUTOR, _transcribe)
+#
+# Both variants:
+#   - measure wall-time via time.perf_counter()
+#   - call emit_phase() on __exit__ / __aexit__
+#   - never raise — timing infrastructure must not crash real paths
+#   - emit ok=False + error=<exc string> if the wrapped block raised
+#   - re-raise the original exception after emitting
+
+
+class _PhaseTimer:
+    """Context manager object returned by phase_timer().
+
+    Supports both synchronous (``with``) and asynchronous (``async with``)
+    usage from a single instance.
+    """
+
+    def __init__(self, phase_name: str, session_id: str, message_id: str) -> None:
+        self._phase_name = phase_name
+        self._session_id = session_id
+        self._message_id = message_id
+        self._t0: float = 0.0
+
+    # -- sync --
+
+    def __enter__(self) -> "_PhaseTimer":
+        self._t0 = time.perf_counter()
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: types.TracebackType | None,
+    ) -> None:
+        duration_ms = int((time.perf_counter() - self._t0) * 1000)
+        ok = exc_type is None
+        error_str = str(exc_val) if exc_val is not None else None
+        try:
+            get_chat_flow_log().emit_phase(
+                phase_name=self._phase_name,
+                session_id=self._session_id,
+                message_id=self._message_id,
+                duration_ms=duration_ms,
+                ok=ok,
+                error=error_str,
+            )
+        except Exception:  # noqa: BLE001 — instrumentation must never raise
+            pass
+        # Return None (falsy) so exceptions propagate normally.
+
+    # -- async --
+
+    async def __aenter__(self) -> "_PhaseTimer":
+        self._t0 = time.perf_counter()
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: types.TracebackType | None,
+    ) -> None:
+        duration_ms = int((time.perf_counter() - self._t0) * 1000)
+        ok = exc_type is None
+        error_str = str(exc_val) if exc_val is not None else None
+        try:
+            get_chat_flow_log().emit_phase(
+                phase_name=self._phase_name,
+                session_id=self._session_id,
+                message_id=self._message_id,
+                duration_ms=duration_ms,
+                ok=ok,
+                error=error_str,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def phase_timer(phase_name: str, session_id: str, message_id: str) -> _PhaseTimer:
+    """Return a context manager that times a phase and emits a chat.phase.* event.
+
+    Works as both ``with phase_timer(...)`` (synchronous) and
+    ``async with phase_timer(...)`` (asynchronous).
+
+    Args:
+        phase_name:  Short label for the phase (e.g. "stt_transcribe").
+        session_id:  Channel / session identifier for the turn.
+        message_id:  Per-message UUID (may be empty on voice path).
+
+    Never raises — exceptions from the wrapped block propagate normally;
+    emit failures are silently dropped.
+    """
+    return _PhaseTimer(phase_name, session_id, message_id)

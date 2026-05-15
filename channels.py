@@ -36,7 +36,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 from pydantic import TypeAdapter, ValidationError
 
 from bus import ModalityBus
-from chat_flow_log import CHAT_MESSAGE_RECEIVED, CHAT_RESPONSE_GENERATED, get_chat_flow_log
+from chat_flow_log import CHAT_MESSAGE_RECEIVED, CHAT_RESPONSE_GENERATED, get_chat_flow_log, phase_timer
 from modality import CognitiveEvent, EncodedOutput, ModalityType
 from modules.voice import WhisperDecoder
 from pipeline_state import PipelineState
@@ -443,7 +443,11 @@ class BrowserChannel:
         if len(pcm_data) < 6400:  # <200ms at 16kHz Int16
             return
 
-        t0 = time.perf_counter()
+        # stt_capture: time from PCM buffer ready (EndOfSpeech received) to
+        # just before we hand off to the STT executor.  Measures the in-process
+        # overhead between VAD speech-end and the transcription job starting.
+        _stt_capture_t0 = time.perf_counter()
+        _msg_id = ""  # voice path has no message_id until after STT
 
         # Transcribe via mlx_whisper — needs a temp WAV file
         def _transcribe():
@@ -515,14 +519,30 @@ class BrowserChannel:
                 os.unlink(tmp_path)
 
         loop = asyncio.get_event_loop()
+
+        # Emit stt_capture: covers the overhead from EndOfSpeech to executor handoff.
+        _stt_capture_ms = int((time.perf_counter() - _stt_capture_t0) * 1000)
         try:
-            event = await loop.run_in_executor(_STT_EXECUTOR, _transcribe)
+            get_chat_flow_log().emit_phase(
+                phase_name="stt_capture",
+                session_id=self.channel_id,
+                message_id=_msg_id,
+                duration_ms=_stt_capture_ms,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+        try:
+            async with phase_timer("stt_transcribe", self.channel_id, _msg_id):
+                event = await loop.run_in_executor(_STT_EXECUTOR, _transcribe)
         except Exception as exc:  # noqa: BLE001
             logger.error("STT executor error: %s", exc)
             await self._send_error("stt_failed", str(exc))
             return
 
-        stt_ms = (time.perf_counter() - t0) * 1000
+        # stt_ms is used only for the TranscriptFrame display; the authoritative
+        # wall-time is captured in the chat.phase.stt_transcribe event above.
+        stt_ms = 0.0
 
         if event and event.content:
             # Send transcript to browser
