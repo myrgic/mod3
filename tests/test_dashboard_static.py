@@ -61,9 +61,7 @@ class TestDashboardTrailingSlash:
         resp_slash = client.get("/dashboard/")
         assert resp_no_slash.status_code == 200
         assert resp_slash.status_code == 200
-        assert resp_no_slash.content == resp_slash.content, (
-            "/dashboard and /dashboard/ returned different bodies"
-        )
+        assert resp_no_slash.content == resp_slash.content, "/dashboard and /dashboard/ returned different bodies"
 
     # -----------------------------------------------------------------------
     # Subpages — must still work
@@ -93,6 +91,4 @@ class TestDashboardTrailingSlash:
         acceptable — the important invariant is not-200.
         """
         resp = client.get("/dashboard/../etc/passwd", follow_redirects=False)
-        assert resp.status_code in (400, 404), (
-            f"expected 400 or 404 for path traversal, got {resp.status_code}"
-        )
+        assert resp.status_code in (400, 404), f"expected 400 or 404 for path traversal, got {resp.status_code}"
