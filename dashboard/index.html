@@ -7,8 +7,10 @@
 <style>
   :root {
     --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --fg: #e6edf3;
     --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff;
     --green: #3fb950; --orange: #d29922; --red: #f85149;
+    --purple: #bc8cff;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, system-ui, sans-serif; background: var(--bg); color: var(--text); line-height: 1.5; height: 100vh; display: flex; flex-direction: column; }
@@ -463,7 +465,7 @@
     <span class="spill" id="pill-mod3"><span class="dot" id="pill-mod3-dot"></span><span id="pill-mod3-label">mod3</span></span>
     <span class="spill" id="pill-sessions"><span class="dot ok"></span><span id="pill-sessions-count">0</span>&nbsp;sessions</span>
   </div>
-  <button id="gear-btn" title="Toggle side panel">&#9881;</button>
+  <button id="gear-btn" title="Toggle side panel (G)" aria-label="Toggle side panel" aria-controls="side-panel" aria-expanded="true">&#9881;</button>
   <!-- Legacy status dots kept in DOM for JS compatibility -->
   <span class="status-dot" id="status-server" style="display:none;"></span>
   <span class="status-dot" id="status-mic" style="display:none;"></span>
@@ -496,7 +498,7 @@
     <div id="sessions-sidebar-content">
       <div style="padding: 12px; color: var(--muted); font-size: 0.8rem;">Loading...</div>
     </div>
-    <button id="new-session-btn">&#43; New Session</button>
+    <button id="new-session-btn" aria-label="Start a new session">&#43; New Session</button>
   </div>
 
   <!-- MIDDLE: Main pane -->
@@ -540,10 +542,10 @@
 
   <!-- RIGHT: Side panel -->
   <div class="side-panel" id="side-panel">
-    <div class="side-panel-tabs">
-      <span class="side-panel-tab active" data-tab="settings">Settings</span>
-      <span class="side-panel-tab" data-tab="traces">Traces</span>
-      <span class="side-panel-tab" data-tab="debug">Debug</span>
+    <div class="side-panel-tabs" role="tablist" aria-label="Side panel tabs">
+      <span class="side-panel-tab active" data-tab="settings" role="tab" aria-selected="true" tabindex="0">Settings</span>
+      <span class="side-panel-tab" data-tab="traces" role="tab" aria-selected="false" tabindex="0">Traces</span>
+      <span class="side-panel-tab" data-tab="debug" role="tab" aria-selected="false" tabindex="0">Debug</span>
     </div>
     <div class="side-panel-content">
 
@@ -773,8 +775,11 @@
   function applyShell() {
     if (!shell) return;
     shell.classList.toggle('side-panel-hidden', !open);
+    if (gearBtn) gearBtn.setAttribute('aria-expanded', String(open));
     tabs.forEach(t => {
-      t.classList.toggle('active', t.dataset.tab === activeTab);
+      const isActive = t.dataset.tab === activeTab;
+      t.classList.toggle('active', isActive);
+      t.setAttribute('aria-selected', String(isActive));
     });
     document.querySelectorAll('.side-panel-section').forEach(s => {
       s.classList.toggle('active', s.id === 'tab-' + activeTab);
@@ -815,6 +820,45 @@
       if (typeof window.__debugStreamStart === 'function') window.__debugStreamStart();
     }, 0);
   }
+})();
+
+// --- Global keyboard shortcuts ---
+// G         : toggle side panel (same as gear button)
+// 1 / 2 / 3 : switch to Settings / Traces / Debug tab
+// Escape    : close side panel if open (or handled by child panels)
+(function initKeyboardShortcuts() {
+  const TAB_KEYS = { '1': 'settings', '2': 'traces', '3': 'debug' };
+
+  document.addEventListener('keydown', e => {
+    // Don't hijack shortcuts when typing in inputs.
+    const tag = (e.target || {}).tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+    const key = e.key;
+
+    if (key === 'g' || key === 'G') {
+      const btn = document.getElementById('gear-btn');
+      if (btn) { btn.click(); e.preventDefault(); }
+      return;
+    }
+
+    if (TAB_KEYS[key]) {
+      const tabName = TAB_KEYS[key];
+      const tab = document.querySelector(`.side-panel-tab[data-tab="${tabName}"]`);
+      if (tab) { tab.click(); e.preventDefault(); }
+      return;
+    }
+
+    if (key === 'Escape') {
+      // If side panel is open, close it.
+      const shell = document.getElementById('shell');
+      if (shell && !shell.classList.contains('side-panel-hidden')) {
+        const btn = document.getElementById('gear-btn');
+        if (btn) { btn.click(); e.preventDefault(); }
+      }
+    }
+  });
 })();
 
 // --- Status pills (kernel + mod3 health) ---
@@ -915,7 +959,7 @@ window.__renderSessionsSidebar = function(sessions) {
                     kind === 'agent' ? 'kernel' : kind;
     const displayId = pid.length > 20 ? pid.slice(0, 18) + '…' : pid;
     return (
-      '<div class="sidebar-session-row' + (isSelf ? ' active' : '') + '" data-sid="' + sid + '">' +
+      '<div class="sidebar-session-row' + (isSelf ? ' active' : '') + '" data-sid="' + sid + '" tabindex="0" role="button" aria-label="Select session ' + sid + '">' +
         '<span class="sidebar-session-dot' + (isSelf ? ' active' : '') + '"></span>' +
         '<div class="sidebar-session-info">' +
           '<div class="sidebar-session-id">' + displayId + '</div>' +
@@ -928,6 +972,59 @@ window.__renderSessionsSidebar = function(sessions) {
     );
   }).join('');
 };
+
+// --- Session sidebar click delegation ---
+// Clicking a session row makes it the "active" session: highlights it in the
+// sidebar and persists the selection in localStorage so refresh restores it.
+// Future: loading that session's chat history into the main pane.
+(function initSidebarClickDelegation() {
+  const SESSION_KEY = 'mod3.sessionId';
+
+  function getContainer() { return document.getElementById('sessions-sidebar-content'); }
+
+  function setActiveRow(sid) {
+    const container = getContainer();
+    if (!container) return;
+    container.querySelectorAll('.sidebar-session-row').forEach(row => {
+      row.classList.toggle('active', row.dataset.sid === sid);
+    });
+  }
+
+  function activateRow(row) {
+    const sid = row.dataset.sid;
+    if (!sid) return;
+    setActiveRow(sid);
+    // Persist the user's explicit session choice
+    try {
+      const saved = JSON.parse(localStorage.getItem(SESSION_KEY)) || {};
+      localStorage.setItem(SESSION_KEY, JSON.stringify({ ...saved, session_id: sid }));
+    } catch {}
+    // Emit a custom event so other panels can react
+    document.dispatchEvent(new CustomEvent('mod3:session-selected', { detail: { session_id: sid } }));
+  }
+
+  function wireContainer(container) {
+    container.addEventListener('click', e => {
+      const row = e.target.closest('.sidebar-session-row');
+      if (row) activateRow(row);
+    });
+    container.addEventListener('keydown', e => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      const row = e.target.closest('.sidebar-session-row');
+      if (row) { e.preventDefault(); activateRow(row); }
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => {
+      const c = getContainer();
+      if (c) wireContainer(c);
+    });
+  } else {
+    const c = getContainer();
+    if (c) wireContainer(c);
+  }
+})();
 
 // --- Substrate visibility panel (debug tab) ---
 // Polls when debug tab is active; exposed as window.__refreshOpsPanel.
