@@ -308,14 +308,26 @@ class OllamaProvider:
 
 
 class CogOSProvider:
-    """CogOS kernel — OpenAI-compatible chat/completions with tool support."""
+    """CogOS kernel — OpenAI-compatible chat/completions with tool support.
 
-    def __init__(self, endpoint: str | None = None):
-        self._endpoint = endpoint or os.environ.get("COGOS_ENDPOINT", "http://localhost:5100")
+    Routes inference through the kernel at localhost:6931, which applies the
+    Tier-1 provider ladder: Eclipse 26b A4B (on LAN) > Darkstar local runtimes
+    (off-LAN) > Ollama E4B (safety net). The dashboard always gets the best
+    available model, not the in-process Gemma 3 4B fallback.
+
+    Model routing is controlled by the COGOS_MODEL env var (default:
+    "lmstudio-eclipse" — the kernel provider alias for Eclipse 26b A4B). Set to
+    "local" for the Ollama baseline, "google/gemma-4-26b-a4b" for an explicit
+    model id, or any other kernel provider alias.
+    """
+
+    def __init__(self, endpoint: str | None = None, model: str | None = None):
+        self._endpoint = endpoint or os.environ.get("COGOS_ENDPOINT", "http://localhost:6931")
+        self._model = model or os.environ.get("COGOS_MODEL", "lmstudio-eclipse")
 
     @property
     def name(self) -> str:
-        return "cogos"
+        return f"cogos/{self._model}"
 
     async def chat(
         self,
@@ -328,7 +340,7 @@ class CogOSProvider:
             msgs = [{"role": "system", "content": system}] + msgs
 
         body: dict[str, Any] = {
-            "model": "cogos/auto",
+            "model": self._model,
             "messages": msgs,
             "stream": False,
         }
@@ -341,7 +353,7 @@ class CogOSProvider:
             "X-Origin": "mod3-dashboard",
         }
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=120.0) as client:
             resp = await client.post(
                 f"{self._endpoint}/v1/chat/completions",
                 json=body,
@@ -398,42 +410,92 @@ def _mlx_available() -> bool:
 
 
 async def auto_detect_provider_async() -> InferenceProvider:
-    """Probe available backends: MLX > CogOS > Ollama."""
-    # MLX — in-process, fastest, no network overhead
-    if _mlx_available():
-        logger.info("auto-detect: using MLX (in-process)")
+    """Probe available backends: CogOS kernel > Ollama > MLX (in-process fallback).
+
+    Priority rationale (2026-05-15):
+      1. CogOS kernel (localhost:6931) — canonical Tier-1 router; applies the
+         3-state ladder: Eclipse 26b A4B (on LAN) > Darkstar local runtimes >
+         Ollama E4B safety net. This is the correct inference path for the
+         dashboard — the kernel routes to the best available provider, not the
+         in-process 4B model.
+      2. Ollama — local daemon available when kernel is down.
+      3. MLX in-process — last resort only; bypasses the kernel's routing
+         entirely and blocks the event loop with CPU-bound generation.
+
+    Override via MOD3_PROVIDER env var:
+      MOD3_PROVIDER=cogos    — force kernel (default behaviour)
+      MOD3_PROVIDER=ollama   — force Ollama (skip kernel check)
+      MOD3_PROVIDER=mlx      — force in-process MLX (debug/offline)
+    """
+    forced = os.environ.get("MOD3_PROVIDER", "").lower()
+
+    if forced == "mlx":
+        logger.info("auto-detect: MOD3_PROVIDER=mlx — using MLX (in-process, forced)")
         return MlxProvider()
-
-    # CogOS — local kernel with OpenAI-compat API
-    cogos_endpoint = os.environ.get("COGOS_ENDPOINT", "http://localhost:5100")
-    if await _probe(f"{cogos_endpoint}/health"):
-        logger.info("auto-detect: using CogOS at %s", cogos_endpoint)
-        return CogOSProvider(endpoint=cogos_endpoint)
-
-    # Ollama — local daemon
-    ollama_endpoint = os.environ.get("OLLAMA_ENDPOINT", "http://localhost:11434")
-    if await _probe(f"{ollama_endpoint}/api/tags"):
-        logger.info("auto-detect: using Ollama at %s", ollama_endpoint)
+    if forced == "ollama":
+        ollama_endpoint = os.environ.get("OLLAMA_ENDPOINT", "http://localhost:11434")
+        logger.info("auto-detect: MOD3_PROVIDER=ollama — using Ollama at %s (forced)", ollama_endpoint)
         return OllamaProvider(endpoint=ollama_endpoint)
 
-    logger.warning("auto-detect: no provider found, defaulting to Ollama")
+    # Default: probe CogOS kernel first
+    cogos_endpoint = os.environ.get("COGOS_ENDPOINT", "http://localhost:6931")
+    if await _probe(f"{cogos_endpoint}/health"):
+        logger.info("auto-detect: using CogOS kernel at %s (Tier-1 router)", cogos_endpoint)
+        return CogOSProvider(endpoint=cogos_endpoint)
+
+    # Fallback: Ollama local daemon
+    ollama_endpoint = os.environ.get("OLLAMA_ENDPOINT", "http://localhost:11434")
+    if await _probe(f"{ollama_endpoint}/api/tags"):
+        logger.info("auto-detect: kernel unreachable — falling back to Ollama at %s", ollama_endpoint)
+        return OllamaProvider(endpoint=ollama_endpoint)
+
+    # Last resort: in-process MLX (only if importable)
+    if _mlx_available():
+        logger.warning(
+            "auto-detect: kernel and Ollama unreachable — falling back to in-process MLX "
+            "(bypasses Tier-1 routing; set COGOS_ENDPOINT if kernel is on a non-default port)"
+        )
+        return MlxProvider()
+
+    logger.warning("auto-detect: no provider found, defaulting to Ollama (may fail if Ollama is not running)")
     return OllamaProvider()
 
 
 def auto_detect_provider() -> InferenceProvider:
-    """Synchronous wrapper for auto-detection."""
+    """Synchronous wrapper for auto-detection.
+
+    Checks MOD3_PROVIDER override first (no async probing needed for forced
+    selection), then falls back to async probing via asyncio.run().
+    """
     import asyncio
 
-    # Fast path: MLX doesn't need async probing
-    if _mlx_available():
-        logger.info("auto-detect: using MLX (in-process)")
+    forced = os.environ.get("MOD3_PROVIDER", "").lower()
+
+    if forced == "mlx":
+        logger.info("auto-detect: MOD3_PROVIDER=mlx — using MLX (in-process, forced)")
         return MlxProvider()
+    if forced == "ollama":
+        ollama_endpoint = os.environ.get("OLLAMA_ENDPOINT", "http://localhost:11434")
+        logger.info("auto-detect: MOD3_PROVIDER=ollama — using Ollama at %s (forced)", ollama_endpoint)
+        return OllamaProvider(endpoint=ollama_endpoint)
+    if forced == "cogos" or forced == "":
+        # CogOS is the default; no fast-path shortcut — need async probe to confirm
+        # kernel is reachable. Fall through to asyncio.run path.
+        pass
 
     try:
         _loop = asyncio.get_running_loop()
     except RuntimeError:
         return asyncio.run(auto_detect_provider_async())
 
-    # If called from an async context, can't use asyncio.run — default to Ollama
-    logger.info("auto-detect: async context, defaulting to Ollama")
-    return OllamaProvider()
+    # Called from an async context (can't use asyncio.run).
+    # Kernel probe not possible here without an await; default to CogOS since
+    # the kernel is almost always up. Caller can use MOD3_PROVIDER=ollama to
+    # override if the kernel is known-down.
+    cogos_endpoint = os.environ.get("COGOS_ENDPOINT", "http://localhost:6931")
+    logger.info(
+        "auto-detect: async context — defaulting to CogOS at %s "
+        "(set MOD3_PROVIDER=ollama or MOD3_PROVIDER=mlx to override)",
+        cogos_endpoint,
+    )
+    return CogOSProvider(endpoint=cogos_endpoint)
