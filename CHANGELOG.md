@@ -2,13 +2,99 @@
 
 ## Unreleased
 
-<<<<<<< HEAD
+_(no entries — see [0.5.0] below)_
+
+## [0.5.0] - 2026-05-15
+
+### Default voice
+
+The CogOS-driven speech default is now `eng_uk_m_davids` (Chatterbox-Turbo cloned British male, "David S"). This replaces the prior default `bm_lewis`. Prosody is more natural under the Chatterbox-Turbo stack; the voice ID is stable and registered in the voice profile registry.
+
+### Added — Channel architecture (ADR-082)
+
+- **Session-aware communication bus** — sessions are first-class citizens on the event bus; per-session routing replaces broadcast fan-out. (#acad6f1)
+- **ACP transport endpoint** — `/ws/acp` accepts connections from ACP-compatible clients and routes prompts through the kernel cycle via `cogos_agent_bridge`. (#31, #34)
+- **Claude Code channel via separated channel-client** — dedicated channel-client module (supersedes the in-process bridge approach from #39). (#40)
+- **Single-path channel routing** — removed superseded bridge, fallback, and mcp_shim layers; one canonical routing path through the bus. (#42)
+- **ACP client e2e flow tests** and ACP-client pattern documentation. (#44)
+- **Sessions browser** — dashboard UI panel showing ACP-client projects and sessions. (#43)
+- **Echo suppression** — originating seat excluded from fan-out to prevent self-echo. (#45)
+
+### Added — Dashboard surface
+
+- **Three-column shell** — skeleton layout with sessions sidebar, main panel, and Settings / Traces / Debug side panel. (#d0ed93b)
+- **Settings panel** — transport, voice, and audio controls in the settings tab. (#36)
+- **Three-tab page nav** — Dashboard / Console / Voice Lab. (#33)
+- **Real-time trace panel** — phase timeline with kernel sub-spans. (#56)
+- **Hierarchical span tree** — agent-prism-inspired nested span display replacing the flat Gantt. (#a80d72a)
+- **Debug tab bus event stream** — live bus events in the Debug tab. (#66)
+- **Providers/available endpoint** — dynamic backend selector populated from `/providers/available`. (#ade87e8)
+- **Accessibility and keyboard shortcuts** (Wave 3H+I). (#67)
+- **Participant panel** and auto-register on page load. (#cff22f3)
+
+### Added — Voice and TTS
+
+- **Queue-aware `POST /v1/speak` endpoint** — HTTP counterpart to the `speak()` MCP tool; returns queue position, estimated wait, and active job state. (#54)
+- **Voice profile registry** (Phases 1–3) — cloned voices as first-class voice IDs stored under `~/.mod3/voices/`; voice profile I/O, schema, and profile management. (#21)
+- **Unified `output()` MCP tool** — single tool with `mode` ∈ `{audio, text, both}` dispatching to TTS, dashboard chat, or both simultaneously. (#55)
+- **`bargein.event` with position tracking** — emitted on TTS interrupt with byte-level position so consumers know how much was spoken. (#57)
+- **RTVI 1.3.0 audio envelope** for `/ws/audio/{session_id}` sidecar. (#29)
+- **`/ws/audio/{session_id}` WebSocket** for per-session playback routing. (#69dd70d)
+
+### Added — STT and open-mic
+
+- **Continuous voice** — auto-start VAD, barge-in integration, and tunable endpointing for always-on mic capture. (#38)
+- **Multi-strategy Whisper dedup** — Z-function, sentence-level, and N-way deduplication strategies to eliminate phrase doubling. (#53)
+- **Dedicated STT thread executor** — isolates Whisper inference onto its own `ThreadPoolExecutor` to prevent blocking the async event loop. (#25)
+
+### Added — Observability
+
+- **Structured chat-flow log** — `chat_flow_log.py` captures turn lifecycle; `/v1/logs/chat-flow` endpoints expose the log over HTTP. (#46)
+- **Per-phase wall-time instrumentation** — every pipeline phase records wall-clock durations for turn observability. (#51)
+- **W3C traceparent injection** — `CogOSProvider` injects a W3C-compliant `traceparent` header; `trace_id` propagated through `chat_flow_log`. (#52)
+- **`trace_id` propagation** — trace IDs flow through all phase events: `stt_capture`, `stt_transcribe`, `tts_synthesize`, `tts_playback_start`. (#58, #60)
+
+### Added — CogOS modality node (RFC-0001)
+
+- **Cog-native modality node scaffolding** — `modality.py`, Pipecat integration, and RFC-0001 design doc. (#27)
+- **Typed API surfaces** — `schemas.http`, `schemas.ws_chat`, `schemas.ws_audio`. (#28)
+
+### Added — MCP transport
+
+- **HTTP-MCP mount at `/mcp`** — `install_mcp_route()` mounts FastAPI-native streamable-HTTP MCP transport; guarded against double-install. (#c05ed89, #9922d58)
+- **`.mcp.json` switched to HTTP transport** — project-level MCP config updated to use the canonical HTTP path. (#f1cc22b)
+
 ### Changed
-- **FastAPI lifespan migration** (`http_api.py`) — replaced all `@app.on_event("startup")` / `@app.on_event("shutdown")` decorators with a single `@asynccontextmanager` lifespan passed to `FastAPI(lifespan=...)`. Startup order: Kokoro warmup thread, kernel-bus bridge, CogOS agent bridge. Shutdown order: reverse. Eliminates the DeprecationWarning emitted on every boot.
-=======
+
+- **FastAPI lifespan migration** (`http_api.py`) — replaced all `@app.on_event("startup")` / `@app.on_event("shutdown")` decorators with a single `@asynccontextmanager` lifespan. Startup order: Kokoro warmup thread, kernel-bus bridge, CogOS agent bridge. Shutdown order: reverse. Eliminates the DeprecationWarning emitted on every boot. (#ba5e8e9)
+- **Dashboard inference routed through CogOS kernel** — provider requests go to `/v1/chat/completions` on the kernel instead of in-process MLX. (#49)
+- **Voice dropdown populated dynamically** from `/v1/voices`. (#48)
+- **Version read from `pyproject.toml`** via `importlib.metadata` instead of a hardcoded constant. (#eebc588)
+- **Generic example identifiers** in MCP tool schemas (scrubbed participant-specific examples). (#8, #9)
+
 ### Deprecated
-- **stdio MCP transport (Phase 1 soft deprecation)** — `python server.py` (no args), `--all`, and `--channel` now emit a `DeprecationWarning` to stderr at boot. The stdio path remains fully functional; no behavior has changed. CLI `--help` text for `--all` and `--channel` now notes the deprecation. README updated to present HTTP-MCP (`python server.py --http`, connect via `/mcp`) as the canonical transport. Tracked in [#11](https://github.com/myrgic/mod3/issues/11); Phases 2–4 (flip default, retire `mcp_shim.py`, remove stdio) are separate future PRs.
->>>>>>> b5ac054 (feat(deprecation): stdio MCP transport — Phase 1 soft deprecation)
+
+- **stdio MCP transport (Phase 1 soft deprecation)** — `python server.py` (no args), `--all`, and `--channel` now emit a `DeprecationWarning` to stderr at boot. The stdio path remains fully functional; no behavior has changed. CLI `--help` text for `--all` and `--channel` notes the deprecation. HTTP-MCP (`python server.py --http`, connect via `/mcp`) is the canonical transport. Tracked in [#11](https://github.com/myrgic/mod3/issues/11); Phases 2–4 (flip default, retire `mcp_shim.py`, remove stdio) are separate future PRs. (#26, #f180d9fb)
+
+### Fixed
+
+- **Queue deadlock + Spark speed `KeyError`** — resolved a deadlock in queue stability and a missing-key error in Spark speed routing. (#20)
+- **Kernel health endpoint URL** — corrected the URL used by the dashboard to check kernel health. (#68)
+- **Channel-client 404** — `mod3_speak` in channel-client was calling the wrong endpoint; switched to `/v1/speak`. (#69)
+- **Trace panel**: `trace_id` grouping, `turn_total` Gantt exclusion, kernel sub-span extraction. (#62)
+- **Trace panel**: wall-clock Gantt, expand-state preservation, turn dedup. (#59)
+- **Tracing**: propagate `trace_id` to all phase events; trace panel SSE and render. (#58)
+- **Output**: `mode='audio'` now also emits text bubble to dashboard. (#61)
+- **STT**: suppressed Whisper phrase-doubling via conditioning params and dedup backstop. (#50)
+- **Bridge**: subscribes to per-bus SSE endpoint for agent responses. (#35)
+- **Dashboard**: cycle trace removal, chat default to `/ws/chat`, ACP spec compliance. (#32)
+- **Dashboard**: persist output device, close sink-timing race. (#08d679f)
+- **Dashboard**: route WebSocket audio to the selected output device. (#7e441ee)
+- **Dashboard**: audio WebSocket buffer must be `ArrayBuffer`, not `Uint8Array`. (#4da2533)
+- **Dashboard**: serve `index.html` for `GET /dashboard/` (trailing slash). (#47)
+- **Channels**: clean teardown on WebSocket disconnect. (#24)
+- **MCP**: start MCP session manager during FastAPI lifespan (was missed on `--http` start). (#180d9fb)
+- Various lint and formatting fixes (ruff).
 
 ## [0.4.0] - 2026-04-19
 

@@ -15,8 +15,11 @@ Mod³ is a Python MCP server that provides text-to-speech for Claude Code, Curso
 - **Barge-in detection** -- VAD (voice activity detection) monitors the microphone. If the user starts talking, playback stops and the agent is notified. No talking over people.
 - **Turn-taking** -- Bidirectional awareness of who's speaking. The agent can check user state before deciding to speak or wait.
 - **Multi-model routing** -- Four TTS engines behind one interface. Voice name determines which engine handles the request.
+- **Voice profile registry** -- Cloned voices are stored as named profiles under `~/.mod3/voices/` and addressable as first-class voice IDs alongside built-in engine presets.
+- **Continuous open-mic** -- Always-on VAD with auto-start barge-in and tunable endpointing; Whisper STT uses multi-strategy deduplication (Z-function, sentence-level, N-way) to eliminate phrase doubling.
 - **Adaptive buffering** -- EMA-based arrival rate tracking with dynamic startup threshold. Gapless playback under normal load, graceful degradation under GPU contention.
 - **Structured metrics** -- Every call returns TTFA, RTF, per-chunk timing, buffer health, underrun counts, and memory usage. The agent can diagnose its own audio quality.
+- **Observability** -- Per-phase wall-time instrumentation and W3C traceparent propagation through `CogOSProvider`; trace IDs flow from inbound request to every pipeline phase.
 
 ## Engines
 
@@ -83,11 +86,15 @@ For users who have not migrated yet, the stdio path remains available. Add to yo
 Synthesize text and play through speakers. Returns immediately with a job ID, queue state, and estimated wait time.
 
 ```
-speak("Hello world")                                        → default voice (bm_lewis @ 1.25x)
+speak("Hello world")                                        → default voice (eng_uk_m_davids @ 1.25x)
 speak("Hello world", voice="casual_male")                   → Voxtral
 speak("Hello world", voice="chatterbox", emotion=0.8)       → Chatterbox with high emotion
 speak("Hello world", voice="am_michael", speed=1.4)         → Kokoro fast
 ```
+
+### `output(text, mode?, stream?)`
+
+Unified output tool. `mode` selects the channel: `"audio"` (TTS only), `"text"` (dashboard chat bubble only), or `"both"` (simultaneous TTS + chat bubble). Defaults to `"audio"`. Replaces separate speak-and-notify patterns with a single call.
 
 ### `speech_status(job_id?, verbose?)`
 
@@ -103,7 +110,7 @@ Check microphone for voice activity. Returns whether the user is currently speak
 
 ### `list_voices()`
 
-List all available voices grouped by engine, with control surface tags.
+List all available voices grouped by engine, with control surface tags. Includes cloned voices from the voice profile registry (`~/.mod3/voices/`).
 
 ### `set_output_device(device?)`
 
@@ -115,10 +122,15 @@ Show loaded engines, active jobs, output device, and last generation metrics.
 
 ## Architecture
 
-Two files:
+Key modules:
 
 - **`server.py`** -- MCP tool definitions, multi-model registry, sentence chunking, non-blocking job management, queue-aware returns
+- **`http_api.py`** -- FastAPI HTTP server; mounts the HTTP-MCP transport at `/mcp`, the ACP WebSocket endpoint at `/ws/acp`, and per-session audio at `/ws/audio/{session_id}`
 - **`adaptive_player.py`** -- Callback-based audio playback with EMA arrival rate tracking, adaptive startup threshold, and structured metrics collection
+- **`bus.py`** -- Session-aware event bus; sessions are first-class, per-session routing replaces broadcast fan-out (ADR-082)
+- **`voice_profiles.py`** / **`voice_profile_io.py`** -- Voice profile registry; cloned voice profiles stored under `~/.mod3/voices/` are addressable as first-class voice IDs
+- **`chat_flow_log.py`** -- Structured turn lifecycle log with per-phase wall-time instrumentation and W3C traceparent propagation
+- **`dashboard/`** -- Three-column browser dashboard: sessions sidebar, main chat panel, and Settings / Traces / Debug side panel with hierarchical span tree
 
 The adaptive player is model-agnostic. Any TTS engine that produces audio chunks feeds the same pipeline.
 
@@ -143,9 +155,8 @@ Mod³ is the voice layer in the [CogOS](https://github.com/myrgic/cogos) ecosyst
 | [cogos](https://github.com/myrgic/cogos) | The daemon |
 | **mod3** | **Voice -- this repo** |
 | [constellation](https://github.com/myrgic/constellation) | Distributed identity and trust |
-| [skills](https://github.com/myrgic/skills) | Agent skill library |
+| [plugins](https://github.com/myrgic/plugins) | Agent skill library |
 | [charts](https://github.com/myrgic/charts) | Helm charts for deployment |
-| [desktop](https://github.com/myrgic/desktop) | macOS dashboard app |
 
 ## License
 
