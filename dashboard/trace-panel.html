@@ -1,0 +1,783 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mod³ Trace Panel</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff;
+    --green: #3fb950; --orange: #d29922; --red: #f85149;
+    /* Phase colors */
+    --phase-stt:       #58a6ff; /* blue  — STT capture/transcribe */
+    --phase-agent:     #d29922; /* amber — agent dispatch */
+    --phase-provider:  #bc8cff; /* purple — provider/LLM call */
+    --phase-tool:      #3fb950; /* green — tool execute */
+    --phase-tts:       #f78166; /* salmon — TTS synthesize */
+    --phase-tts-play:  #ff9f43; /* orange — TTS playback start */
+    --phase-total:     #30363d; /* grey — turn total bar */
+    --phase-kernel:    #79c0ff; /* light blue — kernel sub-spans */
+    --phase-speculative: #6e40c9; /* muted purple — speculative output */
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, system-ui, sans-serif; background: var(--bg); color: var(--text); line-height: 1.5; min-height: 100vh; display: flex; flex-direction: column; }
+
+  /* Header */
+  .header {
+    display: flex; align-items: center; gap: 16px;
+    padding: 12px 24px; border-bottom: 1px solid var(--border);
+    background: var(--surface); flex-shrink: 0;
+  }
+  .header h1 { font-size: 1.2rem; margin-right: auto; }
+  .header h1 .sub { color: var(--muted); font-weight: 400; font-size: 0.95rem; margin-left: 8px; }
+  .tabs { display: flex; gap: 4px; margin-right: 16px; }
+  .tab {
+    padding: 6px 12px; text-decoration: none;
+    color: var(--muted); font-size: 0.85rem;
+    border: 1px solid transparent; border-radius: 4px;
+    transition: color 0.15s, background 0.15s, border-color 0.15s;
+  }
+  .tab:hover { color: var(--text); background: var(--bg); }
+  .tab.active { color: var(--accent); border-color: var(--accent); background: var(--surface); }
+
+  /* Controls */
+  .controls {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 24px; border-bottom: 1px solid var(--border);
+    background: var(--surface); flex-shrink: 0; flex-wrap: wrap;
+  }
+  .controls label { font-size: 0.75rem; color: var(--muted); }
+  .controls input[type=range] { width: 80px; }
+  .controls select, .controls input[type=text] {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+    padding: 4px 8px; color: var(--text); font-size: 0.8rem;
+  }
+  .btn-sm {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+    padding: 4px 10px; color: var(--text); font-size: 0.8rem; cursor: pointer;
+  }
+  .btn-sm:hover { border-color: var(--accent); color: var(--accent); }
+  .btn-sm.danger { border-color: var(--red); color: var(--red); }
+  .conn-status { font-size: 0.75rem; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot.ok { background: var(--green); animation: pulse 2s infinite; }
+  .dot.err { background: var(--red); }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+  /* Main */
+  .main { flex: 1; display: flex; flex-direction: column; padding: 16px 24px; gap: 16px; overflow: hidden; min-height: 0; }
+
+  /* Legend */
+  .legend {
+    display: flex; gap: 12px; flex-wrap: wrap; flex-shrink: 0;
+    font-size: 0.72rem; color: var(--muted);
+  }
+  .legend-item { display: flex; align-items: center; gap: 4px; }
+  .legend-swatch { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+
+  /* Turn list */
+  .turns-container { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+
+  /* Turn card */
+  .turn-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 6px; overflow: hidden;
+  }
+  .turn-header {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 12px; cursor: pointer; user-select: none;
+    font-size: 0.8rem; border-bottom: 1px solid transparent;
+    transition: background 0.1s;
+  }
+  .turn-header:hover { background: rgba(255,255,255,0.04); }
+  .turn-header.expanded { border-bottom-color: var(--border); }
+  .turn-idx { font-size: 0.7rem; color: var(--muted); min-width: 28px; }
+  .turn-ts { font-size: 0.7rem; color: var(--muted); min-width: 80px; font-variant-numeric: tabular-nums; }
+  .turn-session { font-size: 0.7rem; color: var(--muted); font-family: monospace; min-width: 90px; overflow: hidden; text-overflow: ellipsis; }
+  .turn-total-ms { font-size: 0.72rem; color: var(--orange); min-width: 60px; font-variant-numeric: tabular-nums; text-align: right; }
+  .turn-chevron { margin-left: auto; font-size: 0.7rem; color: var(--muted); transition: transform 0.15s; }
+  .turn-chevron.open { transform: rotate(90deg); }
+
+  /* Timeline bar */
+  .timeline-wrapper { padding: 10px 12px; overflow-x: auto; }
+  .timeline {
+    position: relative; height: 36px; background: var(--bg);
+    border-radius: 4px; overflow: visible; min-width: 300px;
+  }
+  .phase-bar {
+    position: absolute; top: 6px; height: 24px; border-radius: 3px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.62rem; font-weight: 600; color: rgba(0,0,0,0.85);
+    overflow: hidden; white-space: nowrap; cursor: default;
+    transition: opacity 0.1s; min-width: 2px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+  }
+  .phase-bar:hover { opacity: 0.85; z-index: 10; }
+  .phase-bar.speculative {
+    background: repeating-linear-gradient(
+      45deg, var(--phase-speculative), var(--phase-speculative) 4px,
+      rgba(110,64,201,0.4) 4px, rgba(110,64,201,0.4) 8px
+    );
+    color: #c9b3ff;
+  }
+
+  /* Phase tooltip */
+  .tooltip {
+    position: fixed; background: #1c2128; border: 1px solid var(--border);
+    border-radius: 6px; padding: 8px 10px; font-size: 0.75rem; color: var(--text);
+    pointer-events: none; z-index: 1000; max-width: 320px; word-break: break-word;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+  }
+  .tooltip-title { font-weight: 600; color: var(--accent); margin-bottom: 4px; }
+  .tooltip-row { display: flex; justify-content: space-between; gap: 12px; }
+  .tooltip-key { color: var(--muted); }
+  .tooltip-val { font-variant-numeric: tabular-nums; }
+
+  /* Turn detail (expanded) */
+  .turn-detail { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+  .detail-section-title { font-size: 0.7rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+  .detail-phases { display: flex; flex-direction: column; gap: 4px; }
+  .detail-phase-row {
+    display: flex; align-items: center; gap: 10px; font-size: 0.78rem;
+    padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,0.04);
+  }
+  .detail-phase-name { min-width: 180px; display: flex; align-items: center; gap: 6px; }
+  .detail-swatch { width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0; }
+  .detail-dur { min-width: 70px; color: var(--orange); font-variant-numeric: tabular-nums; }
+  .detail-tokens { font-size: 0.72rem; color: var(--muted); }
+
+  /* Tool calls */
+  .tool-calls-list { display: flex; flex-direction: column; gap: 6px; }
+  .tool-call-row { background: var(--bg); border: 1px solid var(--border); border-radius: 4px; }
+  .tool-call-header {
+    display: flex; align-items: center; gap: 8px; padding: 6px 10px;
+    font-size: 0.78rem; cursor: pointer; user-select: none;
+  }
+  .tool-call-header:hover { background: rgba(255,255,255,0.04); border-radius: 4px; }
+  .tool-call-name { color: var(--green); font-family: monospace; }
+  .tool-call-dur { color: var(--muted); font-size: 0.7rem; font-variant-numeric: tabular-nums; margin-left: auto; }
+  .tool-call-args {
+    padding: 6px 10px; font-size: 0.73rem; font-family: monospace;
+    color: var(--muted); white-space: pre-wrap; word-break: break-word;
+    border-top: 1px solid var(--border); background: rgba(0,0,0,0.2);
+    display: none;
+  }
+  .tool-call-args.visible { display: block; }
+
+  /* Speculative block */
+  .speculative-block {
+    background: rgba(110,64,201,0.12); border: 1px solid rgba(110,64,201,0.4);
+    border-radius: 4px; padding: 8px 10px; font-size: 0.78rem;
+  }
+  .speculative-title { font-size: 0.7rem; color: #c9b3ff; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+  .speculative-text { color: #c9b3ff; font-style: italic; }
+  .speculative-meta { font-size: 0.68rem; color: var(--muted); margin-top: 4px; }
+
+  /* Empty state */
+  .empty { text-align: center; color: var(--muted); padding: 60px 0; font-size: 0.9rem; }
+  .empty .hint { font-size: 0.78rem; margin-top: 8px; }
+</style>
+</head>
+<body>
+
+<header class="header">
+  <h1>Mod³ <span class="sub">Trace Panel</span></h1>
+  <nav class="tabs">
+    <a class="tab" href="/dashboard">Dashboard</a>
+    <a class="tab" href="/dashboard/console.html">Console</a>
+    <a class="tab" href="/dashboard/voice-lab.html">Voice Lab</a>
+    <a class="tab" href="/dashboard/sessions.html">Sessions</a>
+    <a class="tab active" href="/dashboard/trace-panel.html">Traces</a>
+  </nav>
+</header>
+
+<div class="controls">
+  <div class="conn-status">
+    <div class="dot" id="mod3-dot"></div>
+    <span id="mod3-label">mod3 —</span>
+  </div>
+  <div class="conn-status" style="margin-left:8px">
+    <div class="dot" id="kernel-dot"></div>
+    <span id="kernel-label">kernel —</span>
+  </div>
+
+  <label style="margin-left:16px">Session:
+    <input type="text" id="session-filter" placeholder="all" style="width:120px;margin-left:4px">
+  </label>
+
+  <label>Max turns:
+    <select id="max-turns">
+      <option value="20">20</option>
+      <option value="50" selected>50</option>
+      <option value="100">100</option>
+    </select>
+  </label>
+
+  <button class="btn-sm" id="pause-btn">Pause</button>
+  <button class="btn-sm danger" id="clear-btn">Clear</button>
+
+  <span id="event-count" style="font-size:0.72rem;color:var(--muted);margin-left:auto"></span>
+</div>
+
+<div class="main">
+  <!-- Legend -->
+  <div class="legend">
+    <div class="legend-item"><div class="legend-swatch" style="background:var(--phase-stt)"></div>STT capture/transcribe</div>
+    <div class="legend-item"><div class="legend-swatch" style="background:var(--phase-agent)"></div>Agent dispatch</div>
+    <div class="legend-item"><div class="legend-swatch" style="background:var(--phase-provider)"></div>Provider (LLM)</div>
+    <div class="legend-item"><div class="legend-swatch" style="background:var(--phase-tool)"></div>Tool execute</div>
+    <div class="legend-item"><div class="legend-swatch" style="background:var(--phase-tts)"></div>TTS synthesize</div>
+    <div class="legend-item"><div class="legend-swatch" style="background:var(--phase-tts-play)"></div>TTS playback</div>
+    <div class="legend-item"><div class="legend-swatch" style="background:var(--phase-kernel)"></div>Kernel sub-spans</div>
+    <div class="legend-item"><div class="legend-swatch" style="background:var(--phase-speculative);border:1px solid #6e40c9"></div>Speculative (unsaid)</div>
+  </div>
+
+  <!-- Turn cards -->
+  <div class="turns-container" id="turns-container">
+    <div class="empty" id="empty-state">
+      Waiting for trace events…
+      <div class="hint">Send a chat message or speak to the dashboard to see turns appear here.</div>
+    </div>
+  </div>
+</div>
+
+<!-- Tooltip -->
+<div class="tooltip" id="tooltip" style="display:none"></div>
+
+<script>
+// ── Config ───────────────────────────────────────────────────────────────────
+const MOD3_URL   = location.origin;                    // same origin
+const KERNEL_URL = 'http://localhost:6931';
+
+// ── State ────────────────────────────────────────────────────────────────────
+let paused = false;
+let turns  = [];          // array of TurnGroup objects
+let turnIndex = 0;
+let mod3Events   = 0;
+let kernelEvents = 0;
+
+// Map from message_id → turn group index
+const msgIdToTurn = {};
+
+// ── Phase color map ───────────────────────────────────────────────────────────
+const PHASE_COLORS = {
+  'stt_capture':          'var(--phase-stt)',
+  'stt_transcribe':       'var(--phase-stt)',
+  'agent_dispatch':       'var(--phase-agent)',
+  'provider_call':        'var(--phase-provider)',
+  'tool_execute':         'var(--phase-tool)',
+  'tts_synthesize':       'var(--phase-tts)',
+  'tts_playback_start':   'var(--phase-tts-play)',
+  'turn_total':           'var(--phase-total)',
+  // kernel sub-spans
+  'chat.prompt_eval':          'var(--phase-kernel)',
+  'chat.thinking_generation':  '#b388ff',
+  'chat.answer_generation':    'var(--phase-provider)',
+  'chat.tool_call_resolution': 'var(--phase-tool)',
+};
+
+function phaseColor(name) {
+  return PHASE_COLORS[name] || 'var(--muted)';
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function fmtMs(ms) {
+  if (ms == null) return '—';
+  if (ms < 1000) return ms + 'ms';
+  return (ms / 1000).toFixed(1) + 's';
+}
+
+function fmtTs(isoStr) {
+  if (!isoStr) return '';
+  const d = new Date(isoStr);
+  return d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit', fractionalSecondDigits:1});
+}
+
+function shortSession(id) {
+  if (!id) return '—';
+  return id.length > 12 ? id.slice(0, 12) + '…' : id;
+}
+
+// ── SSE connection ────────────────────────────────────────────────────────────
+function connectMod3() {
+  const dot   = document.getElementById('mod3-dot');
+  const label = document.getElementById('mod3-label');
+
+  // First load recent events from the ring buffer
+  fetch(MOD3_URL + '/v1/logs/chat-flow?limit=200')
+    .then(r => r.json())
+    .then(events => {
+      if (Array.isArray(events)) {
+        events.forEach(processMod3Event);
+      }
+    })
+    .catch(() => {});
+
+  // Then stream new events
+  const es = new EventSource(MOD3_URL + '/v1/logs/chat-flow/stream');
+  es.onopen = () => { dot.className = 'dot ok'; label.textContent = 'mod3 live'; };
+  es.onerror = () => { dot.className = 'dot err'; label.textContent = 'mod3 disconnected'; };
+  es.onmessage = (e) => {
+    if (paused) return;
+    try {
+      const ev = JSON.parse(e.data);
+      processMod3Event(ev);
+    } catch {}
+  };
+  return es;
+}
+
+function connectKernel() {
+  const dot   = document.getElementById('kernel-dot');
+  const label = document.getElementById('kernel-label');
+
+  const es = new EventSource(KERNEL_URL + '/v1/bus/bus_traces/stream');
+  es.onopen = () => { dot.className = 'dot ok'; label.textContent = 'kernel live'; };
+  es.onerror = () => { dot.className = 'dot err'; label.textContent = 'kernel disconnected'; };
+  es.onmessage = (e) => {
+    if (paused) return;
+    try {
+      const block = JSON.parse(e.data);
+      processKernelEvent(block);
+    } catch {}
+  };
+  return es;
+}
+
+// ── TurnGroup management ──────────────────────────────────────────────────────
+function getOrCreateTurn(messageId, sessionId, ts) {
+  if (messageId && msgIdToTurn[messageId] != null) {
+    return turns[msgIdToTurn[messageId]];
+  }
+  // New turn
+  const t = {
+    idx:       ++turnIndex,
+    messageId: messageId || null,
+    sessionId: sessionId || '',
+    ts:        ts || new Date().toISOString(),
+    phases:    [],      // {name, duration_ms, ok, tokens}
+    kernelSpans: [],    // kernel sub-spans from bus_traces
+    toolCalls: [],      // tool call records (from tool_execute phases)
+    speculative: null,  // {text, bargein_ms, text_offset}
+    totalMs:   null,
+  };
+  turns.push(t);
+  if (messageId) msgIdToTurn[messageId] = turns.length - 1;
+  return t;
+}
+
+function processMod3Event(ev) {
+  const et = ev.event_type || '';
+  const sid = ev.session_id || '';
+  const msgId = ev.message_id || '';
+  const ts = ev.ts || '';
+
+  // Phase events
+  if (et.startsWith('chat.phase.')) {
+    const phaseName = ev.phase_name || et.replace('chat.phase.', '');
+    const turn = getOrCreateTurn(msgId, sid, ts);
+    const entry = {
+      name:        phaseName,
+      duration_ms: ev.duration_ms,
+      ok:          ev.ok !== false,
+      tokens:      ev.tokens || null,
+      trace_id:    ev.trace_id || null,
+    };
+    if (phaseName === 'turn_total') {
+      turn.totalMs = ev.duration_ms;
+    }
+    // Check for tool call detail
+    if (phaseName === 'tool_execute' && ev.tool_name) {
+      turn.toolCalls.push({
+        name:       ev.tool_name,
+        args:       ev.tool_args || null,
+        duration_ms: ev.duration_ms,
+      });
+    }
+    turn.phases.push(entry);
+    mod3Events++;
+    scheduleRender();
+    return;
+  }
+
+  // Bargein event — creates speculative block
+  if (et === 'bargein.event') {
+    const turn = getOrCreateTurn(msgId, sid, ts);
+    turn.speculative = {
+      text_actually_played: ev.text_actually_played || '',
+      text_speculative:     ev.text_speculative || '',
+      bargein_position_ms:  ev.bargein_position_ms || null,
+      text_offset:          ev.bargein_position_text_offset || null,
+    };
+    mod3Events++;
+    scheduleRender();
+    return;
+  }
+
+  mod3Events++;
+}
+
+function processKernelEvent(block) {
+  // block is a BusBlock: {type, payload, ...}
+  const payload = block.payload || block;
+  const blockType = payload.type || block.type || '';
+
+  if (blockType === 'kernel.handler.span.v1') {
+    // Handler-level span — attach to turn by session if we can match
+    kernelEvents++;
+    // We can't correlate to a message_id here; just update event count
+    scheduleRender();
+    return;
+  }
+
+  // Chat sub-spans emitted by cogos handle_chat
+  // type: "chat.prompt_eval" | "chat.thinking_generation" | "chat.answer_generation" | "chat.tool_call_resolution"
+  const spanName = payload.span_name || blockType;
+  if (spanName && spanName.startsWith('chat.')) {
+    const sid = payload.session_id || '';
+    const traceId = payload.trace_id || '';
+    // Try to find a matching turn by trace_id or recent session
+    let turn = null;
+    if (traceId) {
+      // Look for a turn whose trace_id matches
+      for (let i = turns.length - 1; i >= 0; i--) {
+        for (const p of turns[i].phases) {
+          if (p.trace_id === traceId) { turn = turns[i]; break; }
+        }
+        if (turn) break;
+      }
+    }
+    // Fallback: most recent turn for this session
+    if (!turn && sid) {
+      for (let i = turns.length - 1; i >= 0; i--) {
+        if (turns[i].sessionId === sid) { turn = turns[i]; break; }
+      }
+    }
+    if (!turn && turns.length > 0) {
+      turn = turns[turns.length - 1];
+    }
+    if (turn) {
+      turn.kernelSpans.push({
+        name:         spanName,
+        duration_ms:  payload.duration_ms,
+        tokens_think: payload.tokens_think || null,
+        tokens_answer: payload.tokens_answer || null,
+        tokens_total: payload.tokens_total || null,
+        tool_count:   payload.tool_call_count || null,
+      });
+    }
+    kernelEvents++;
+    scheduleRender();
+  }
+}
+
+// ── Render ────────────────────────────────────────────────────────────────────
+let renderScheduled = false;
+function scheduleRender() {
+  if (!renderScheduled) {
+    renderScheduled = true;
+    requestAnimationFrame(() => { renderScheduled = false; renderAll(); });
+  }
+}
+
+function renderAll() {
+  const container = document.getElementById('turns-container');
+  const sessionFilter = document.getElementById('session-filter').value.trim().toLowerCase();
+  const maxT = parseInt(document.getElementById('max-turns').value) || 50;
+  const empty = document.getElementById('empty-state');
+
+  let filtered = turns;
+  if (sessionFilter) {
+    filtered = turns.filter(t => t.sessionId.toLowerCase().includes(sessionFilter));
+  }
+
+  // Keep only most recent maxT
+  const visible = filtered.slice(-maxT).reverse(); // newest first
+
+  if (visible.length === 0) {
+    empty.style.display = '';
+  } else {
+    empty.style.display = 'none';
+  }
+
+  // Remove all turn cards (simple full re-render; fine for ≤100 turns)
+  Array.from(container.querySelectorAll('.turn-card')).forEach(el => el.remove());
+
+  // Append (reversed = newest at top)
+  for (const t of visible) {
+    const card = buildTurnCard(t);
+    container.insertBefore(card, container.firstChild === empty ? null : empty.nextSibling);
+    container.insertBefore(card, empty.nextSibling);
+  }
+
+  // Ensure empty state is last
+  container.appendChild(empty);
+
+  // Update counters
+  document.getElementById('event-count').textContent =
+    `${mod3Events} mod3 events / ${kernelEvents} kernel spans / ${turns.length} turns`;
+}
+
+function buildTurnCard(t) {
+  const card = document.createElement('div');
+  card.className = 'turn-card';
+
+  // Compute timeline layout
+  const allPhases = [...t.phases, ...t.kernelSpans];
+  const totalMs = t.totalMs || allPhases.reduce((s, p) => s + (p.duration_ms || 0), 0) || 1;
+
+  // Header
+  const hdr = document.createElement('div');
+  hdr.className = 'turn-header';
+  hdr.innerHTML = `
+    <span class="turn-idx">#${t.idx}</span>
+    <span class="turn-ts">${fmtTs(t.ts)}</span>
+    <span class="turn-session">${shortSession(t.sessionId)}</span>
+    <span style="flex:1"></span>
+    <span class="turn-total-ms">${fmtMs(t.totalMs)}</span>
+    <span class="turn-chevron">▶</span>
+  `;
+  card.appendChild(hdr);
+
+  // Timeline
+  const timelineWrap = document.createElement('div');
+  timelineWrap.className = 'timeline-wrapper';
+  const timeline = document.createElement('div');
+  timeline.className = 'timeline';
+  timelineWrap.appendChild(timeline);
+  card.appendChild(timelineWrap);
+
+  // Render phase bars
+  let cursor = 0; // cumulative offset in ms
+  for (const p of t.phases) {
+    const dur = p.duration_ms || 0;
+    if (dur <= 0) { cursor += dur; continue; }
+    const leftPct  = Math.min((cursor / totalMs) * 100, 98);
+    const widthPct = Math.max((dur / totalMs) * 100, 0.3);
+    const bar = document.createElement('div');
+    bar.className = 'phase-bar';
+    bar.style.left  = leftPct + '%';
+    bar.style.width = Math.min(widthPct, 100 - leftPct) + '%';
+    bar.style.background = phaseColor(p.name);
+    if (widthPct > 4) bar.textContent = p.name.replace(/^(chat\.)/, '');
+    attachTooltip(bar, p);
+    timeline.appendChild(bar);
+    cursor += dur;
+  }
+
+  // Kernel sub-spans (stacked below main phases, slightly offset)
+  let kcursor = 0;
+  for (const k of t.kernelSpans) {
+    const dur = k.duration_ms || 0;
+    if (dur <= 0) { kcursor += dur; continue; }
+    const leftPct  = Math.min((kcursor / totalMs) * 100, 98);
+    const widthPct = Math.max((dur / totalMs) * 100, 0.3);
+    const bar = document.createElement('div');
+    bar.className = 'phase-bar';
+    bar.style.left    = leftPct + '%';
+    bar.style.width   = Math.min(widthPct, 100 - leftPct) + '%';
+    bar.style.top     = '18px';
+    bar.style.height  = '10px';
+    bar.style.background = phaseColor(k.name);
+    bar.style.opacity = '0.7';
+    attachTooltip(bar, k);
+    timeline.appendChild(bar);
+    kcursor += dur;
+  }
+
+  // Speculative block bar (hatched, after solidified content)
+  if (t.speculative) {
+    const solidPct = Math.min((cursor / totalMs) * 100, 98);
+    const specWidth = Math.max(100 - solidPct - 1, 2);
+    const specBar = document.createElement('div');
+    specBar.className = 'phase-bar speculative';
+    specBar.style.left  = solidPct + '%';
+    specBar.style.width = specWidth + '%';
+    specBar.style.top   = '6px';
+    specBar.style.height = '24px';
+    const specData = t.speculative;
+    attachTooltipContent(specBar, {
+      title: 'Speculative Output (unsaid)',
+      rows: [
+        ['text', (specData.text_speculative || '').slice(0, 80) + (specData.text_speculative?.length > 80 ? '…' : '')],
+        ['bargein_ms', specData.bargein_position_ms != null ? specData.bargein_position_ms + 'ms' : '—'],
+        ['text_offset', specData.text_offset != null ? specData.text_offset : '—'],
+      ]
+    });
+    timeline.appendChild(specBar);
+  }
+
+  // Expandable detail
+  const detail = document.createElement('div');
+  detail.className = 'turn-detail';
+  detail.style.display = 'none';
+
+  // Phase list
+  const allForDetail = [...t.phases, ...t.kernelSpans];
+  if (allForDetail.length > 0) {
+    const sec = document.createElement('div');
+    sec.innerHTML = '<div class="detail-section-title">Phases</div>';
+    const phaseList = document.createElement('div');
+    phaseList.className = 'detail-phases';
+    for (const p of allForDetail) {
+      const row = document.createElement('div');
+      row.className = 'detail-phase-row';
+      const tokInfo = buildTokenLabel(p);
+      row.innerHTML = `
+        <div class="detail-phase-name">
+          <div class="detail-swatch" style="background:${phaseColor(p.name)}"></div>
+          ${p.name}
+          ${p.ok === false ? '<span style="color:var(--red);font-size:0.68rem"> ✕</span>' : ''}
+        </div>
+        <div class="detail-dur">${fmtMs(p.duration_ms)}</div>
+        <div class="detail-tokens">${tokInfo}</div>
+      `;
+      phaseList.appendChild(row);
+    }
+    sec.appendChild(phaseList);
+    detail.appendChild(sec);
+  }
+
+  // Tool calls
+  if (t.toolCalls.length > 0) {
+    const sec = document.createElement('div');
+    sec.innerHTML = '<div class="detail-section-title">Tool Calls</div>';
+    const list = document.createElement('div');
+    list.className = 'tool-calls-list';
+    for (const tc of t.toolCalls) {
+      const row = document.createElement('div');
+      row.className = 'tool-call-row';
+      const hdrEl = document.createElement('div');
+      hdrEl.className = 'tool-call-header';
+      hdrEl.innerHTML = `
+        <span class="tool-call-name">${tc.name}</span>
+        <span class="tool-call-dur">${fmtMs(tc.duration_ms)}</span>
+        <span style="font-size:0.68rem;color:var(--muted)">▶ args</span>
+      `;
+      const argsEl = document.createElement('div');
+      argsEl.className = 'tool-call-args';
+      argsEl.textContent = tc.args ? JSON.stringify(tc.args, null, 2) : '(no args captured)';
+      hdrEl.addEventListener('click', () => argsEl.classList.toggle('visible'));
+      row.appendChild(hdrEl);
+      row.appendChild(argsEl);
+      list.appendChild(row);
+    }
+    sec.appendChild(list);
+    detail.appendChild(sec);
+  }
+
+  // Speculative block detail
+  if (t.speculative) {
+    const s = t.speculative;
+    const sec = document.createElement('div');
+    sec.innerHTML = `
+      <div class="speculative-block">
+        <div class="speculative-title">Speculative Output — bargein interrupted this turn</div>
+        ${s.text_actually_played
+          ? `<div style="font-size:0.72rem;color:var(--muted);margin-bottom:4px">Delivered: <span style="color:var(--text)">"${s.text_actually_played}"</span></div>`
+          : ''}
+        ${s.text_speculative
+          ? `<div class="speculative-text">"${s.text_speculative}"</div>`
+          : '<div class="speculative-text">(speculative text not captured)</div>'}
+        <div class="speculative-meta">
+          bargein_position_ms: ${s.bargein_position_ms != null ? s.bargein_position_ms + 'ms' : '—'}
+          &nbsp;|&nbsp; text_offset: ${s.text_offset != null ? s.text_offset : '—'}
+        </div>
+      </div>`;
+    detail.appendChild(sec);
+  }
+
+  card.appendChild(detail);
+
+  // Toggle expand
+  const chevron = hdr.querySelector('.turn-chevron');
+  hdr.addEventListener('click', () => {
+    const open = detail.style.display !== 'none';
+    detail.style.display = open ? 'none' : 'flex';
+    hdr.classList.toggle('expanded', !open);
+    chevron.classList.toggle('open', !open);
+  });
+
+  return card;
+}
+
+function buildTokenLabel(p) {
+  const parts = [];
+  if (p.tokens != null)        parts.push(`${p.tokens} tok`);
+  if (p.tokens_think != null)  parts.push(`${p.tokens_think} think`);
+  if (p.tokens_answer != null) parts.push(`${p.tokens_answer} ans`);
+  if (p.tokens_total != null)  parts.push(`${p.tokens_total} total`);
+  if (p.tool_count != null)    parts.push(`${p.tool_count} tools`);
+  return parts.join(' · ');
+}
+
+// ── Tooltips ──────────────────────────────────────────────────────────────────
+const tooltipEl = document.getElementById('tooltip');
+
+function attachTooltip(el, phase) {
+  attachTooltipContent(el, {
+    title: phase.name,
+    rows: [
+      ['duration', fmtMs(phase.duration_ms)],
+      ...(phase.ok === false ? [['status', 'error']] : []),
+      ...(phase.tokens != null ? [['tokens', phase.tokens]] : []),
+      ...(phase.tokens_think != null ? [['tokens_think', phase.tokens_think]] : []),
+      ...(phase.tokens_answer != null ? [['tokens_answer', phase.tokens_answer]] : []),
+      ...(phase.tokens_total != null ? [['tokens_total', phase.tokens_total]] : []),
+      ...(phase.tool_count != null ? [['tool_calls', phase.tool_count]] : []),
+      ...(phase.trace_id ? [['trace_id', phase.trace_id.slice(0, 16) + '…']] : []),
+    ]
+  });
+}
+
+function attachTooltipContent(el, {title, rows}) {
+  el.addEventListener('mouseenter', (e) => {
+    tooltipEl.innerHTML = `<div class="tooltip-title">${title}</div>` +
+      rows.map(([k, v]) => `<div class="tooltip-row"><span class="tooltip-key">${k}</span><span class="tooltip-val">${v}</span></div>`).join('');
+    tooltipEl.style.display = 'block';
+    positionTooltip(e);
+  });
+  el.addEventListener('mousemove', positionTooltip);
+  el.addEventListener('mouseleave', () => { tooltipEl.style.display = 'none'; });
+}
+
+function positionTooltip(e) {
+  const pad = 12;
+  let x = e.clientX + pad;
+  let y = e.clientY + pad;
+  const tw = tooltipEl.offsetWidth;
+  const th = tooltipEl.offsetHeight;
+  if (x + tw > window.innerWidth - pad)  x = e.clientX - tw - pad;
+  if (y + th > window.innerHeight - pad) y = e.clientY - th - pad;
+  tooltipEl.style.left = x + 'px';
+  tooltipEl.style.top  = y + 'px';
+}
+
+// ── Controls ──────────────────────────────────────────────────────────────────
+document.getElementById('pause-btn').addEventListener('click', (e) => {
+  paused = !paused;
+  e.target.textContent = paused ? 'Resume' : 'Pause';
+  e.target.style.borderColor = paused ? 'var(--orange)' : '';
+  e.target.style.color       = paused ? 'var(--orange)' : '';
+});
+
+document.getElementById('clear-btn').addEventListener('click', () => {
+  turns.length = 0;
+  Object.keys(msgIdToTurn).forEach(k => delete msgIdToTurn[k]);
+  turnIndex = 0;
+  mod3Events = 0;
+  kernelEvents = 0;
+  renderAll();
+});
+
+document.getElementById('session-filter').addEventListener('input', renderAll);
+document.getElementById('max-turns').addEventListener('change', renderAll);
+
+// ── Boot ──────────────────────────────────────────────────────────────────────
+connectMod3();
+connectKernel();
+renderAll();
+</script>
+</body>
+</html>
