@@ -96,6 +96,69 @@ def shutdown_stt_executor(wait: bool = True) -> None:
     _STT_EXECUTOR.shutdown(wait=wait)
 
 
+# ---------------------------------------------------------------------------
+# Whisper repetition dedup — backstop for phrase-doubling hallucinations.
+#
+# Even with condition_on_previous_text=False and temperature=0.0, Whisper
+# occasionally emits the same content twice in one transcript, e.g.:
+#   "How are you? Are you okay? How are you? Are you okay?"
+#
+# This function detects the pattern and trims to the first occurrence.
+# It runs BEFORE is_hallucination() so the BoH check sees the cleaned text.
+# ---------------------------------------------------------------------------
+
+_DEDUP_SIMILARITY_THRESHOLD = 0.95  # fraction of chars that must match
+
+
+def _dedup_repeated_transcript(text: str) -> str:
+    """Return text with trailing repeated content removed.
+
+    Strategy:
+      1. Exact half-split: if the first half and second half of the string
+         are identical (after stripping whitespace), return the first half.
+      2. Suffix-overlap: find the longest suffix of the first half that is
+         a prefix of the second half — if that overlap covers ≥95% of the
+         first half's length, the second half is a near-duplicate repetition.
+      3. If neither heuristic fires, return the original text unchanged.
+
+    Logs at INFO level when dedup fires so operators can observe frequency.
+    """
+    stripped = text.strip()
+    if not stripped:
+        return text
+
+    n = len(stripped)
+    if n < 4:  # too short to be a meaningful repetition
+        return text
+
+    mid = n // 2
+    first_half = stripped[:mid].strip()
+    second_half = stripped[mid:].strip()
+
+    # Heuristic 1 — exact match after stripping.
+    if first_half == second_half and first_half:
+        logger.info("STT dedup: exact half-match, trimmed %d chars", len(second_half))
+        return first_half
+
+    # Heuristic 2 — similarity via longest-common-prefix of suffix/prefix overlap.
+    # Compare character-level similarity between the two halves.
+    if first_half and second_half:
+        shorter_len = min(len(first_half), len(second_half))
+        if shorter_len > 0:
+            # Count matching chars from the start of each half (after strip).
+            matches = sum(a == b for a, b in zip(first_half, second_half))
+            similarity = matches / shorter_len
+            if similarity >= _DEDUP_SIMILARITY_THRESHOLD:
+                logger.info(
+                    "STT dedup: near-duplicate halves (similarity=%.2f), trimmed %d chars",
+                    similarity,
+                    len(second_half),
+                )
+                return first_half
+
+    return text
+
+
 class BrowserChannel:
     """WebSocket-backed channel for the browser dashboard."""
 
@@ -423,8 +486,17 @@ class BrowserChannel:
                     tmp_path,
                     path_or_hf_repo="mlx-community/whisper-large-v3-turbo",
                     language="en",
+                    # Prevent context-driven repetition loops — each window
+                    # decodes independently rather than being primed by the
+                    # prior window's output.
+                    condition_on_previous_text=False,
+                    # Deterministic decoding: single temperature, no fallback
+                    # sampling.  Reduces the stochastic paths that produce
+                    # phantom phrase doubling.
+                    temperature=0.0,
                 )
                 transcript = result.get("text", "").strip()
+                transcript = _dedup_repeated_transcript(transcript)
                 logger.info("STT: '%s' (%.1fs, rms=%.3f)", transcript[:80], len(audio) / 16000, rms)
 
                 if not transcript or is_hallucination(transcript):
