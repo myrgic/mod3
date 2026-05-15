@@ -67,8 +67,35 @@ AGENT_TOOLS: list[dict] = [
     {
         "type": "function",
         "function": {
+            "name": "output",
+            "description": (
+                "Unified output tool. Use for all agent responses. "
+                "mode='audio' for conversational voice replies (TTS), "
+                "mode='text' for content better read than heard (code, lists, links), "
+                "mode='both' for responses that deserve both audio and a visual record."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": "The content to output. Required.",
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["audio", "text", "both"],
+                        "description": "Delivery mode. Default 'audio'.",
+                    },
+                },
+                "required": ["text"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "speak",
-            "description": "Speak text aloud to the user via TTS. Use for conversational responses.",
+            "description": "[DEPRECATED] Use output(text=..., mode='audio') instead. Speak text aloud via TTS.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -85,16 +112,16 @@ AGENT_TOOLS: list[dict] = [
         "type": "function",
         "function": {
             "name": "send_text",
-            "description": "Send text to the chat panel (no speech). Use for code, lists, links, or anything better read than heard.",
+            "description": "[DEPRECATED] Use output(text=..., mode='text') instead. Send text to the chat panel.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "text": {
+                    "content": {
                         "type": "string",
                         "description": "The text to display in chat",
                     }
                 },
-                "required": ["text"],
+                "required": ["content"],
             },
         },
     },
