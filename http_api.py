@@ -1672,6 +1672,53 @@ async def dashboard_static(filename: str):
 _cogos_kernel_url = os.environ.get("COGOS_KERNEL_URL", "http://localhost:6931")
 
 
+@app.get("/v1/providers/available")
+async def get_providers_available():
+    """Return the list of inference providers available on the CogOS kernel.
+
+    Proxies GET /v1/providers from the kernel and returns the same JSON.
+    Falls back to a static default list if the kernel is unreachable, so the
+    dashboard's backend selector always has options to show.
+
+    Response shape::
+
+        {
+          "providers": [
+            {"name": "lmstudio-eclipse", "type": "lmstudio-eclipse", "available": true},
+            ...
+          ]
+        }
+    """
+    import httpx
+
+    target = f"{_cogos_kernel_url}/v1/providers"
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.get(target)
+        if resp.status_code == 200:
+            return Response(
+                content=resp.content,
+                status_code=200,
+                media_type="application/json",
+            )
+    except Exception:
+        pass
+
+    # Fallback: static list derived from known provider names so the UI is
+    # never empty when the kernel is unreachable.
+    return JSONResponse(content={
+        "providers": [
+            {"name": "lmstudio-eclipse", "type": "lmstudio-eclipse", "available": True},
+            {"name": "ollama",            "type": "ollama",           "available": True},
+            {"name": "lmstudio-darkstar", "type": "lmstudio-darkstar","available": False},
+            {"name": "claude-code",       "type": "claude-code",      "available": True},
+            {"name": "codex",             "type": "codex",            "available": False},
+            {"name": "mlx-lm",            "type": "mlx-lm",           "available": False},
+        ],
+        "source": "fallback",
+    })
+
+
 @app.post("/v1/claude-code/spawn")
 async def proxy_claude_code_spawn(request: Request):
     """Proxy POST /v1/claude-code/spawn to the CogOS kernel.
