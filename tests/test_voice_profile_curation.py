@@ -181,8 +181,6 @@ class TestPatchMetadata:
 
     def _seed_profile(self, tmp_path, reg, name: str, extra: dict | None = None) -> None:
         """Write a JSON + empty .safetensors sidecar without touching the model."""
-        import pathlib
-
         d = _make_profile_json(name, extra)
         json_path = tmp_path / f"{name}.json"
         st_path = tmp_path / f"{name}.safetensors"

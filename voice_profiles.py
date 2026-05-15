@@ -31,6 +31,7 @@ def _get_file_lock(path: pathlib.Path) -> threading.Lock:
             _file_locks[key] = threading.Lock()
         return _file_locks[key]
 
+
 _NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 _DEFAULT_ROOT = pathlib.Path.home() / ".mod3" / "voices"

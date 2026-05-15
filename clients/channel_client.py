@@ -39,7 +39,7 @@ MCP surface
   instructions: channel-tag shape + outbound tools description
   tools:
     mod3_dashboard_post(text, role?)  → POST /v1/dashboard-chat
-    mod3_speak(text, voice?, speed?)  → POST /v1/synthesize
+    mod3_speak(text, voice?, speed?)  → POST /v1/speak
 
 Usage
 -----
@@ -342,28 +342,33 @@ def build_mcp_server(client: ChannelClient) -> FastMCP:
             return f"error: {exc}"
 
     @mcp.tool()
-    async def mod3_speak(text: str, voice: str = "bm_lewis", speed: float = 1.0) -> dict:
+    async def mod3_speak(text: str, voice: str = "eng_uk_m_davids", speed: float = 1.0) -> dict:
         """Synthesize text to speech and play it through the Mod³ daemon.
+
+        Hits POST /v1/speak (queue-aware endpoint). Returns immediately with a
+        job token — the daemon's drain thread owns all audio playback.
 
         Args:
             text: Text to synthesize and speak aloud.
-            voice: Voice preset name (use list_voices to discover options). Default: bm_lewis.
+            voice: Voice preset name (use list_voices to discover options).
+                Default: eng_uk_m_davids (Chatterbox-Turbo, British male).
             speed: Playback speed multiplier (0.5–2.0). Default: 1.0.
+
+        Returns:
+            {"job_id": str, "queue_position": int, "status": "speaking" | "queued"}
+            Poll GET /v1/jobs/{job_id} for completion. Stop via POST /v1/stop.
         """
-        url = f"{client.server_url}/v1/synthesize"
+        url = f"{client.server_url}/v1/speak"
         body: dict[str, Any] = {
             "text": text,
             "voice": voice,
             "speed": speed,
-            "session_id": client.session_id,
-            "play_locally": True,
         }
         try:
             async with httpx.AsyncClient() as http:
                 resp = await http.post(url, json=body, headers=_auth_headers(client.token), timeout=30.0)
                 resp.raise_for_status()
-                data = resp.json()
-                return {"job_id": data.get("job_id"), "status": "queued"}
+                return resp.json()
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc)}
 
