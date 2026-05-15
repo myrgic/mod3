@@ -180,6 +180,7 @@ class ChatFlowLog:
         *,
         ok: bool = True,
         error: str | None = None,
+        trace_id: str | None = None,
     ) -> dict[str, Any]:
         """Record a phase-timing event.  Never raises.
 
@@ -195,6 +196,11 @@ class ChatFlowLog:
             duration_ms:  Wall-time for the phase in milliseconds.
             ok:           False if the phase raised an exception.
             error:        Exception message when ok=False.
+            trace_id:     W3C trace-id (32 hex chars) from the upstream provider
+                          request (e.g. from CogOSProvider._make_traceparent).
+                          When present, correlates this mod3 phase event with
+                          the kernel's bus_traces kernel.chat.subspan.v1 events
+                          that share the same trace_id.
         """
         try:
             return self._emit_phase_inner(
@@ -204,6 +210,7 @@ class ChatFlowLog:
                 duration_ms=duration_ms,
                 ok=ok,
                 error=error,
+                trace_id=trace_id,
             )
         except Exception as exc:  # noqa: BLE001
             _logger.debug("chat_flow_log.emit_phase failed: %s", exc)
@@ -217,6 +224,7 @@ class ChatFlowLog:
         duration_ms: int,
         ok: bool,
         error: str | None,
+        trace_id: str | None = None,
     ) -> dict[str, Any]:
         ts = datetime.now(timezone.utc).isoformat()
         event_type = f"{CHAT_PHASE_PREFIX}{phase_name}"
@@ -231,6 +239,8 @@ class ChatFlowLog:
         }
         if not ok and error is not None:
             event["error"] = error
+        if trace_id:
+            event["trace_id"] = trace_id
 
         with self._lock:
             self._ring.append(event)
@@ -464,10 +474,17 @@ class _PhaseTimer:
     usage from a single instance.
     """
 
-    def __init__(self, phase_name: str, session_id: str, message_id: str) -> None:
+    def __init__(
+        self,
+        phase_name: str,
+        session_id: str,
+        message_id: str,
+        trace_id: str | None = None,
+    ) -> None:
         self._phase_name = phase_name
         self._session_id = session_id
         self._message_id = message_id
+        self._trace_id = trace_id
         self._t0: float = 0.0
 
     # -- sync --
@@ -493,6 +510,7 @@ class _PhaseTimer:
                 duration_ms=duration_ms,
                 ok=ok,
                 error=error_str,
+                trace_id=self._trace_id,
             )
         except Exception:  # noqa: BLE001 — instrumentation must never raise
             pass
@@ -521,12 +539,18 @@ class _PhaseTimer:
                 duration_ms=duration_ms,
                 ok=ok,
                 error=error_str,
+                trace_id=self._trace_id,
             )
         except Exception:  # noqa: BLE001
             pass
 
 
-def phase_timer(phase_name: str, session_id: str, message_id: str) -> _PhaseTimer:
+def phase_timer(
+    phase_name: str,
+    session_id: str,
+    message_id: str,
+    trace_id: str | None = None,
+) -> _PhaseTimer:
     """Return a context manager that times a phase and emits a chat.phase.* event.
 
     Works as both ``with phase_timer(...)`` (synchronous) and
@@ -536,8 +560,12 @@ def phase_timer(phase_name: str, session_id: str, message_id: str) -> _PhaseTime
         phase_name:  Short label for the phase (e.g. "stt_transcribe").
         session_id:  Channel / session identifier for the turn.
         message_id:  Per-message UUID (may be empty on voice path).
+        trace_id:    W3C trace-id (32 hex chars) from CogOSProvider._make_traceparent().
+                     When provided, the emitted chat.phase.* event includes a
+                     ``trace_id`` field correlating it with the kernel's
+                     bus_traces kernel.chat.subspan.v1 events.
 
     Never raises — exceptions from the wrapped block propagate normally;
     emit failures are silently dropped.
     """
-    return _PhaseTimer(phase_name, session_id, message_id)
+    return _PhaseTimer(phase_name, session_id, message_id, trace_id=trace_id)

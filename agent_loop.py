@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 import httpx
 
 from bus import ModalityBus
-from chat_flow_log import phase_timer
+from chat_flow_log import get_chat_flow_log, phase_timer
 from draft_queue import DraftQueue
 from modality import CognitiveEvent, CognitiveIntent, ModalityType
 from pipeline_state import PipelineState
@@ -215,14 +215,32 @@ class AgentLoop:
             pass
 
         # --- Phase: provider_call -------------------------------------------
+        # Emit provider_call phase manually so we can attach the trace_id from
+        # the provider response (CogOSProvider stores it on response.raw as
+        # "_mod3_trace_id"). This correlates the mod3 chat.phase.provider_call
+        # event with the kernel's bus_traces kernel.chat.subspan.v1 events that
+        # share the same W3C trace_id injected via the traceparent header.
         t_provider_start = time.perf_counter()
-        async with phase_timer("provider_call", _session_id, _msg_id):
-            response = await self.provider.chat(
-                messages=self.conversation,
-                tools=AGENT_TOOLS,
-                system=system_prompt,
+        response = await self.provider.chat(
+            messages=self.conversation,
+            tools=AGENT_TOOLS,
+            system=system_prompt,
+        )
+        _provider_call_ms = int((time.perf_counter() - t_provider_start) * 1000)
+        t_llm = float(_provider_call_ms)
+        _provider_trace_id: str | None = None
+        if isinstance(response.raw, dict):
+            _provider_trace_id = response.raw.get("_mod3_trace_id")
+        try:
+            get_chat_flow_log().emit_phase(
+                "provider_call",
+                _session_id,
+                _msg_id,
+                _provider_call_ms,
+                trace_id=_provider_trace_id,
             )
-        t_llm = (time.perf_counter() - t_provider_start) * 1000
+        except Exception:  # noqa: BLE001
+            pass
 
         # --- Phase: tool_execute (per tool call) ----------------------------
         # Dispatch tool calls

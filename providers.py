@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
@@ -329,6 +330,24 @@ class CogOSProvider:
     def name(self) -> str:
         return f"cogos/{self._model}"
 
+    @staticmethod
+    def _make_traceparent() -> tuple[str, str]:
+        """Generate a W3C traceparent header and return (header_value, trace_id).
+
+        Format: ``00-<trace_id_32hex>-<parent_id_16hex>-01``
+
+        Both IDs are derived from independent UUID4 values so they are
+        cryptographically random and unique per request. The returned
+        trace_id (32 hex chars) can be stored on the ProviderResponse.raw
+        dict so downstream phase events (chat_flow_log.emit_phase) can
+        include it as a correlation field without an OTel SDK dependency.
+        """
+        trace_id = uuid.uuid4().hex + uuid.uuid4().hex[:0]  # 32 hex chars
+        # uuid4().hex is 32 chars; take first 16 for parent span id
+        parent_id = uuid.uuid4().hex[:16]
+        traceparent = f"00-{trace_id}-{parent_id}-01"
+        return traceparent, trace_id
+
     async def chat(
         self,
         messages: list[dict],
@@ -347,10 +366,19 @@ class CogOSProvider:
         if tools:
             body["tools"] = tools
 
+        # Generate a W3C traceparent for this request so mod3 phase events
+        # (chat_flow_log.emit_phase) share a trace_id with the kernel's
+        # bus_traces sub-spans (kernel.chat.subspan.v1). The kernel propagates
+        # the traceparent via the OTel SDK when a collector is configured;
+        # even without a collector, both sides record the same trace_id so an
+        # operator can join them manually.
+        traceparent, trace_id = self._make_traceparent()
+
         headers = {
             "X-UCP-Identity": '{"name":"cog"}',
             "X-Session-ID": "mod3-dashboard",
             "X-Origin": "mod3-dashboard",
+            "traceparent": traceparent,
         }
 
         async with httpx.AsyncClient(timeout=120.0) as client:
@@ -381,6 +409,11 @@ class CogOSProvider:
                     args = {"text": args}
             if name:
                 tool_calls.append(ToolCall(name=name, arguments=args))
+
+        # Attach trace_id to raw so callers (e.g. agent loop) can forward it
+        # to chat_flow_log.emit_phase as a correlation field.
+        if isinstance(data, dict):
+            data["_mod3_trace_id"] = trace_id
 
         return ProviderResponse(tool_calls=tool_calls, text=content, raw=data)
 
