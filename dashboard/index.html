@@ -726,8 +726,23 @@
             <div id="ops-events" style="max-height:100px; overflow-y:auto; color:var(--muted); font-size:0.7rem; line-height:1.6;">--</div>
           </div>
         </div>
-        <div style="margin-top:12px; font-size:0.7rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Bus Event Stream (Wave 2G)</div>
-        <div id="debug-event-stream">Waiting for events...</div>
+        <!-- Raw bus event stream -->
+        <div style="margin-top:14px;">
+          <div style="font-size:0.7rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px; display:flex; align-items:center; justify-content:space-between;">
+            <span>Bus Event Stream</span>
+            <button id="debug-stream-clear" title="Clear event stream" style="background:none; border:none; color:var(--muted); cursor:pointer; font-size:0.7rem; padding:0 2px;">&#10005;</button>
+          </div>
+          <div style="display:flex; gap:4px; margin-bottom:4px; flex-wrap:wrap;">
+            <select id="debug-stream-bus" style="flex:1; min-width:90px; font-size:0.72rem; background:var(--bg); color:var(--fg); border:1px solid var(--border); border-radius:3px; padding:2px 4px;">
+              <option value="mod3">mod3 (chat-flow)</option>
+              <option value="kernel">kernel (bus_traces)</option>
+            </select>
+            <input id="debug-stream-session" type="text" placeholder="session_id" style="flex:1; min-width:70px; font-size:0.72rem; background:var(--bg); color:var(--fg); border:1px solid var(--border); border-radius:3px; padding:2px 4px;" />
+            <input id="debug-stream-type" type="text" placeholder="event type" style="flex:1; min-width:70px; font-size:0.72rem; background:var(--bg); color:var(--fg); border:1px solid var(--border); border-radius:3px; padding:2px 4px;" />
+          </div>
+          <div id="debug-event-stream">Waiting for events…</div>
+          <div id="debug-stream-status" style="font-size:0.65rem; color:var(--muted); margin-top:3px; text-align:right;">disconnected</div>
+        </div>
       </div>
 
     </div><!-- end .side-panel-content -->
@@ -776,18 +791,30 @@
 
   tabs.forEach(tab => {
     tab.addEventListener('click', () => {
+      const prev = activeTab;
       activeTab = tab.dataset.tab;
       open = true;
       saveShellState({ sidePanelOpen: open, activeTab });
       applyShell();
       // Start debug polling when debug tab opened
-      if (activeTab === 'debug' && typeof window.__refreshOpsPanel === 'function') {
-        window.__refreshOpsPanel();
+      if (activeTab === 'debug') {
+        if (typeof window.__refreshOpsPanel === 'function') window.__refreshOpsPanel();
+        if (typeof window.__debugStreamStart === 'function') window.__debugStreamStart();
+      } else if (prev === 'debug') {
+        if (typeof window.__debugStreamStop === 'function') window.__debugStreamStop();
       }
     });
   });
 
   applyShell();
+
+  // If debug tab is already active on page load, auto-start stream once all
+  // IIFEs have run (use setTimeout 0 to defer past script evaluation).
+  if (activeTab === 'debug') {
+    setTimeout(() => {
+      if (typeof window.__debugStreamStart === 'function') window.__debugStreamStart();
+    }, 0);
+  }
 })();
 
 // --- Status pills (kernel + mod3 health) ---
@@ -1002,6 +1029,217 @@ window.__renderSessionsSidebar = function(sessions) {
 
   // Expose addEvent so the WS handler can push channel events here.
   window.__mod3OpsEvent = addEvent;
+})();
+
+// --- Debug tab: raw bus event stream ---
+// Opens an SSE connection to either the mod3 chat-flow stream or the kernel
+// bus_traces stream. Renders events into #debug-event-stream as they arrive.
+// Started automatically when the debug tab becomes active; paused on hide.
+(function initDebugStream() {
+  const MOD3_STREAM_URL  = '/v1/logs/chat-flow/stream';
+  const KERNEL_STREAM_URL = 'http://localhost:6931/v1/bus/bus_traces/stream';
+  const MAX_ROWS = 200;
+
+  let _es = null;           // current EventSource
+  let _bus = 'mod3';        // 'mod3' | 'kernel'
+  let _sessionFilter = '';  // substring match
+  let _typeFilter = '';     // substring match
+  let _rows = [];           // [{ts, type, session, data}]
+  let _active = false;      // whether the debug tab is shown
+
+  // ---- DOM helpers ----
+  function getContainer() { return document.getElementById('debug-event-stream'); }
+  function getStatusEl()  { return document.getElementById('debug-stream-status'); }
+
+  function setStatus(text, color) {
+    const el = getStatusEl();
+    if (!el) return;
+    el.textContent = text;
+    el.style.color = color || 'var(--muted)';
+  }
+
+  function rowVisible(row) {
+    if (_sessionFilter && !row.session.includes(_sessionFilter)) return false;
+    if (_typeFilter && !row.type.includes(_typeFilter)) return false;
+    return true;
+  }
+
+  function renderStream() {
+    const el = getContainer();
+    if (!el) return;
+    const visible = _rows.filter(rowVisible);
+    if (visible.length === 0) {
+      el.textContent = _rows.length > 0 ? '(no events match filters)' : 'Waiting for events…';
+      return;
+    }
+    el.innerHTML = visible.map(r => {
+      const tsPart = `<span style="color:var(--muted)">${r.ts}</span>`;
+      const typePart = `<span style="color:var(--accent)">${escHtml(r.type)}</span>`;
+      const sessPart = r.session
+        ? ` <span style="color:var(--purple,#b48ead)">${escHtml(r.session)}</span>`
+        : '';
+      const dataPart = `<span style="color:var(--fg)">${escHtml(r.data)}</span>`;
+      return `<div style="border-bottom:1px solid var(--border); padding:2px 0; line-height:1.5;">${tsPart} ${typePart}${sessPart} ${dataPart}</div>`;
+    }).join('');
+    // Auto-scroll to bottom
+    el.scrollTop = el.scrollHeight;
+  }
+
+  function escHtml(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
+  function addRow(type, session, rawData) {
+    const ts = new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    // Compact the data: if it's JSON, summarize; otherwise truncate.
+    let dataStr = rawData;
+    try {
+      const parsed = JSON.parse(rawData);
+      // Show a compact summary: keep event_type + a few key fields
+      const keys = Object.keys(parsed).filter(k => !['ts','timestamp','event_type','session_id','trace_id'].includes(k));
+      const extra = keys.slice(0, 3).map(k => {
+        const v = parsed[k];
+        const vs = typeof v === 'string' ? v.slice(0, 60) : JSON.stringify(v).slice(0, 60);
+        return `${k}:${vs}`;
+      }).join(' ');
+      dataStr = extra || '{}';
+    } catch { /* not JSON, use raw */ }
+
+    _rows.push({ ts, type, session: session || '', data: dataStr });
+    if (_rows.length > MAX_ROWS) _rows.splice(0, _rows.length - MAX_ROWS);
+    renderStream();
+  }
+
+  // ---- SSE wiring ----
+  function buildUrl() {
+    if (_bus === 'kernel') {
+      // Kernel SSE doesn't support query-param filtering on the stream endpoint
+      return KERNEL_STREAM_URL;
+    }
+    // mod3 supports session_id + event_type query params
+    const params = new URLSearchParams();
+    if (_sessionFilter) params.set('session_id', _sessionFilter);
+    if (_typeFilter)    params.set('event_type', _typeFilter);
+    const qs = params.toString();
+    return qs ? `${MOD3_STREAM_URL}?${qs}` : MOD3_STREAM_URL;
+  }
+
+  function connect() {
+    disconnect();
+    if (!_active) return;
+    const url = buildUrl();
+    try {
+      _es = new EventSource(url);
+    } catch (e) {
+      setStatus('error: ' + e.message, 'var(--red)');
+      return;
+    }
+    setStatus('connecting…', 'var(--orange)');
+
+    // mod3 sends `event: chat_flow` named events; kernel sends unnamed `data:` events.
+    if (_bus === 'mod3') {
+      _es.addEventListener('chat_flow', evt => {
+        let type = 'event', session = '';
+        try {
+          const d = JSON.parse(evt.data);
+          type = d.event_type || 'chat_flow';
+          session = d.session_id || '';
+        } catch {}
+        addRow(type, session, evt.data);
+      });
+    } else {
+      _es.onmessage = evt => {
+        let type = 'bus', session = '';
+        try {
+          const d = JSON.parse(evt.data);
+          type = d.type || d.event_type || 'bus';
+          session = d.data && d.data.session_id ? d.data.session_id : (d.session_id || '');
+          // Apply client-side session/type filter for kernel stream
+          if (_sessionFilter && !session.includes(_sessionFilter)) return;
+          if (_typeFilter && !type.includes(_typeFilter)) return;
+        } catch {}
+        addRow(type, session, evt.data);
+      };
+    }
+
+    _es.onopen = () => setStatus('connected — ' + (_bus === 'mod3' ? 'mod3' : 'kernel'), 'var(--accent)');
+    _es.onerror = () => {
+      setStatus('reconnecting…', 'var(--orange)');
+      // Browser auto-reconnects; just update status.
+    };
+  }
+
+  function disconnect() {
+    if (_es) { try { _es.close(); } catch {} _es = null; }
+    setStatus('disconnected');
+  }
+
+  // ---- Public API ----
+  // Called when debug tab opens/closes; also exposed for initShell to wire.
+  window.__debugStreamStart = function() {
+    _active = true;
+    connect();
+  };
+  window.__debugStreamStop = function() {
+    _active = false;
+    disconnect();
+  };
+
+  // ---- Control wiring ----
+  function rebuildConnection() {
+    if (_active) { disconnect(); connect(); }
+  }
+
+  function onReady() {
+    const busSel  = document.getElementById('debug-stream-bus');
+    const sessFld = document.getElementById('debug-stream-session');
+    const typeFld = document.getElementById('debug-stream-type');
+    const clearBtn = document.getElementById('debug-stream-clear');
+
+    if (busSel) {
+      busSel.addEventListener('change', () => {
+        _bus = busSel.value;
+        rebuildConnection();
+      });
+    }
+    if (sessFld) {
+      let _t;
+      sessFld.addEventListener('input', () => {
+        clearTimeout(_t);
+        _t = setTimeout(() => {
+          _sessionFilter = sessFld.value.trim();
+          if (_bus === 'mod3') rebuildConnection(); // re-URL with param
+          else renderStream();                      // kernel: client-side only
+        }, 300);
+      });
+    }
+    if (typeFld) {
+      let _t;
+      typeFld.addEventListener('input', () => {
+        clearTimeout(_t);
+        _t = setTimeout(() => {
+          _typeFilter = typeFld.value.trim();
+          if (_bus === 'mod3') rebuildConnection();
+          else renderStream();
+        }, 300);
+      });
+    }
+    if (clearBtn) {
+      clearBtn.addEventListener('click', () => {
+        _rows = [];
+        renderStream();
+      });
+    }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', onReady);
+  } else {
+    onReady();
+  }
 })();
 
 // --- Settings persistence (localStorage) ---
