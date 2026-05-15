@@ -271,37 +271,211 @@
     .msg { max-width: 90%; }
     #participants-panel { right: 8px; width: calc(100vw - 16px); }
   }
+
+  /* ── Three-column shell ───────────────────────────────────────────────── */
+  .shell {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 220px 1fr 320px;
+    grid-template-rows: 1fr;
+    overflow: hidden;
+    min-height: 0;
+    transition: grid-template-columns 0.2s ease;
+  }
+  .shell.side-panel-hidden {
+    grid-template-columns: 220px 1fr 0px;
+  }
+
+  /* Sessions sidebar (left) */
+  .sessions-sidebar {
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--border);
+    background: var(--surface);
+    overflow: hidden;
+  }
+  .sessions-sidebar-header {
+    padding: 10px 12px;
+    font-size: 0.7rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+  }
+  #sessions-sidebar-content {
+    flex: 1;
+    overflow-y: auto;
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+  .sidebar-session-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    cursor: pointer;
+    border-bottom: 1px solid rgba(48,54,61,0.4);
+    font-size: 0.8rem;
+    transition: background 0.1s;
+  }
+  .sidebar-session-row:hover { background: rgba(255,255,255,0.04); }
+  .sidebar-session-row.active { background: rgba(88,166,255,0.08); border-left: 2px solid var(--accent); padding-left: 10px; }
+  .sidebar-session-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
+  .sidebar-session-dot.active { background: var(--green); }
+  .sidebar-session-info { flex: 1; min-width: 0; }
+  .sidebar-session-id { font-family: monospace; font-size: 0.72rem; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sidebar-session-meta { font-size: 0.68rem; color: var(--muted); display: flex; gap: 6px; margin-top: 1px; }
+  .sidebar-session-backend { font-size: 0.65rem; padding: 1px 5px; border-radius: 6px; background: var(--bg); border: 1px solid var(--border); color: var(--muted); }
+  #new-session-btn {
+    display: block;
+    margin: 8px 10px;
+    padding: 6px 10px;
+    background: none;
+    border: 1px dashed var(--border);
+    border-radius: 4px;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 0.8rem;
+    text-align: left;
+    flex-shrink: 0;
+  }
+  #new-session-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* Main pane (center) */
+  .main-pane {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 12px 20px;
+    overflow: hidden;
+    min-height: 0;
+    max-width: none;
+    width: 100%;
+    margin: 0;
+  }
+
+  /* Side panel (right) */
+  .side-panel {
+    display: flex;
+    flex-direction: column;
+    border-left: 1px solid var(--border);
+    background: var(--surface);
+    overflow: hidden;
+    min-width: 0;
+  }
+  .shell.side-panel-hidden .side-panel {
+    display: none;
+  }
+  .side-panel-tabs {
+    display: flex;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    background: var(--bg);
+  }
+  .side-panel-tab {
+    padding: 8px 12px;
+    font-size: 0.75rem;
+    cursor: pointer;
+    color: var(--muted);
+    border-bottom: 2px solid transparent;
+    user-select: none;
+    transition: color 0.15s;
+  }
+  .side-panel-tab:hover { color: var(--text); }
+  .side-panel-tab.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+  }
+  .side-panel-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px;
+  }
+  .side-panel-section { display: none; }
+  .side-panel-section.active { display: block; }
+
+  /* Gear button */
+  #gear-btn {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 8px;
+    cursor: pointer;
+    color: var(--muted);
+    font-size: 0.85rem;
+    line-height: 1;
+  }
+  #gear-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* Compact status pills (replace old Server/Mic pills in header) */
+  .status-pills { display: flex; gap: 6px; align-items: center; }
+  .spill {
+    display: flex; align-items: center; gap: 5px;
+    font-size: 0.72rem; color: var(--muted);
+    padding: 3px 8px; border-radius: 10px;
+    background: var(--bg); border: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  .spill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
+  .spill .dot.ok { background: var(--green); }
+  .spill .dot.warn { background: var(--orange); }
+  .spill .dot.err { background: var(--red); }
+
+  /* Debug tab content */
+  #debug-event-stream {
+    height: 180px;
+    overflow-y: auto;
+    font-size: 0.7rem;
+    font-family: monospace;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px;
+    margin-top: 6px;
+    color: var(--muted);
+    background: var(--bg);
+  }
+
+  /* Responsive */
+  @media (max-width: 900px) {
+    .shell { grid-template-columns: 180px 1fr 0px; }
+    .shell.side-panel-hidden { grid-template-columns: 180px 1fr 0px; }
+    .side-panel { display: none !important; }
+  }
 </style>
 </head>
 <body>
 
-<!-- Header with connection status -->
+<!-- Header — compact status pills + gear toggle -->
 <div class="header">
   <h1>Mod&#179; <span class="sub">Dashboard</span></h1>
   <nav class="tabs">
     <a class="tab active" href="/dashboard">Dashboard</a>
     <a class="tab" href="/dashboard/console.html">Console</a>
     <a class="tab" href="/dashboard/voice-lab.html">Voice Lab</a>
-    <a class="tab" href="/dashboard/sessions.html">Sessions</a>
     <a class="tab" href="/dashboard/trace-panel.html">Traces</a>
   </nav>
-  <div class="status-pill">
-    <span class="status-dot" id="status-server"></span>
-    <span>Server</span>
+  <div class="status-pills">
+    <span class="spill" id="pill-kernel"><span class="dot" id="pill-kernel-dot"></span><span id="pill-kernel-label">kernel</span></span>
+    <span class="spill" id="pill-mod3"><span class="dot" id="pill-mod3-dot"></span><span id="pill-mod3-label">mod3</span></span>
+    <span class="spill" id="pill-sessions"><span class="dot ok"></span><span id="pill-sessions-count">0</span>&nbsp;sessions</span>
   </div>
-  <div class="status-pill">
-    <span class="status-dot" id="status-mic"></span>
-    <span>Mic</span>
-  </div>
-  <div class="participants-pill" id="participants-toggle" title="Live sessions on the bus (ADR-082)">
-    <span>&#128101;</span>
+  <button id="gear-btn" title="Toggle side panel">&#9881;</button>
+  <!-- Legacy status dots kept in DOM for JS compatibility -->
+  <span class="status-dot" id="status-server" style="display:none;"></span>
+  <span class="status-dot" id="status-mic" style="display:none;"></span>
+  <!-- Legacy participants pill kept for JS compatibility -->
+  <div style="display:none;" id="participants-toggle">
     <span class="count" id="participants-count">0</span>
-    <span>session<span id="participants-plural">s</span></span>
+    <span id="participants-plural">s</span>
   </div>
 </div>
 
-<!-- Participant panel (Wave 4) — live /v1/sessions roster -->
-<div id="participants-panel">
+<!-- Participant panel (Wave 4) — kept for JS compatibility, hidden visually -->
+<div id="participants-panel" style="display:none !important; position:absolute; visibility:hidden;">
   <div class="pp-header">
     <span>Participants</span>
     <span class="session-id" id="participants-self-id">unregistered</span>
@@ -311,8 +485,22 @@
   </ul>
 </div>
 
-<!-- Main content -->
-<div class="main">
+<!-- Three-column shell -->
+<div class="shell" id="shell">
+
+  <!-- LEFT: Sessions sidebar -->
+  <div class="sessions-sidebar">
+    <div class="sessions-sidebar-header">
+      <span>Sessions</span>
+    </div>
+    <div id="sessions-sidebar-content">
+      <div style="padding: 12px; color: var(--muted); font-size: 0.8rem;">Loading...</div>
+    </div>
+    <button id="new-session-btn">&#43; New Session</button>
+  </div>
+
+  <!-- MIDDLE: Main pane -->
+  <div class="main-pane">
 
   <!-- Controls — compact bar -->
   <div class="voice-controls">
@@ -323,117 +511,10 @@
       <div class="level-bar-inner" id="voice-level"></div>
     </div>
     <span style="font-size:0.6rem; color:var(--muted);" id="mic-debug"></span>
-    <button style="background:none; border:1px solid var(--border); border-radius:4px; padding:4px 10px; color:var(--muted); cursor:pointer; font-size:0.85rem;" id="settings-toggle" title="Settings">&#9881;</button>
   </div>
 
-  <!-- Settings panel (collapsed by default) -->
-  <div id="settings-panel" style="display:none; background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:12px 16px; margin-bottom:8px;">
-
-    <!-- Transport section -->
-    <div style="margin-bottom:10px;">
-      <div style="font-size:0.7rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px;">Transport</div>
-      <div style="display:flex; gap:16px; align-items:center; flex-wrap:wrap;">
-        <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:0.85rem;">
-          <input type="radio" name="transport" id="transport-chat" value="chat"> /ws/chat (legacy)
-        </label>
-        <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:0.85rem;">
-          <input type="radio" name="transport" id="transport-acp" value="acp"> /ws/acp (ACP)
-        </label>
-        <span id="transport-reload-notice" style="display:none; font-size:0.7rem; color:var(--orange); margin-left:4px;">Reload page to apply</span>
-      </div>
-    </div>
-
-    <!-- Agent backend indicator -->
-    <div style="margin-bottom:10px; display:flex; align-items:center; gap:8px;">
-      <div style="font-size:0.7rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px;">Agent Backend</div>
-      <span id="agent-backend-badge" style="font-size:0.7rem; padding:2px 8px; border-radius:8px; border:1px solid var(--border); color:var(--muted); background:var(--bg);">checking...</span>
-    </div>
-
-    <!-- Voice synthesis section -->
-    <div style="margin-bottom:10px;">
-      <div style="font-size:0.7rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px;">Voice Synthesis</div>
-      <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:end;">
-        <div class="form-group">
-          <label>TTS Model</label>
-          <select id="voice-model">
-            <option value="kokoro" selected>Kokoro 82M (fast)</option>
-            <option value="voxtral">Voxtral 4B (quality)</option>
-            <option value="chatterbox">Chatterbox (clone)</option>
-            <option value="spark">Spark 0.5B</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label>Voice</label>
-          <select id="voice-voice">
-            <option value="">Loading voices…</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label>Speed</label>
-          <select id="tts-speed">
-            <option value="1.0">1.0x</option>
-            <option value="1.25" selected>1.25x</option>
-            <option value="1.5">1.5x</option>
-            <option value="2.0">2.0x</option>
-          </select>
-        </div>
-        <div class="form-group" id="emotion-group" style="display:none;">
-          <label>Emotion <span style="font-size:0.65rem; color:var(--muted);">(Chatterbox)</span></label>
-          <div style="display:flex; align-items:center; gap:6px;">
-            <input type="range" id="tts-emotion" min="0" max="1" step="0.05" value="0.5" style="width:80px; accent-color:var(--accent);">
-            <span id="tts-emotion-val" style="font-size:0.8rem; color:var(--muted); min-width:28px;">0.50</span>
-          </div>
-        </div>
-        <div class="form-group">
-          <label>VAD Sensitivity</label>
-          <select id="vad-mode">
-            <option value="0.3">Very Sensitive</option>
-            <option value="0.5" selected>Normal</option>
-            <option value="0.7">Low (noisy room)</option>
-            <option value="0.85">Very Low</option>
-          </select>
-        </div>
-      </div>
-    </div>
-
-    <!-- Audio devices section -->
-    <div style="margin-bottom:10px;">
-      <div style="font-size:0.7rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px;">Audio Devices</div>
-      <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:end;">
-        <div class="form-group">
-          <label>Output Device</label>
-          <select id="audio-output">
-            <option value="">Default</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label>Input Device</label>
-          <select id="audio-input">
-            <option value="">Default</option>
-          </select>
-        </div>
-      </div>
-    </div>
-
-    <!-- Advanced (collapsible) -->
-    <details style="margin-bottom:6px;">
-      <summary style="font-size:0.7rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; cursor:pointer; user-select:none;">Advanced</summary>
-      <div style="margin-top:8px; display:flex; gap:12px; flex-wrap:wrap; align-items:end;">
-        <div class="form-group">
-          <label>Audio Sidecar Mode</label>
-          <select id="audio-sidecar-mode">
-            <option value="rtvi" selected>RTVI 1.3.0 (default)</option>
-            <option value="legacy">Legacy audio_header</option>
-          </select>
-        </div>
-      </div>
-    </details>
-
-    <!-- Reset button -->
-    <div style="margin-top:8px;">
-      <button id="settings-reset-btn" style="background:none; border:1px solid var(--border); border-radius:4px; padding:4px 12px; color:var(--muted); cursor:pointer; font-size:0.75rem;">Reset to defaults</button>
-    </div>
-  </div>
+  <!-- Settings panel placeholder — content moved to side panel #tab-settings -->
+  <div id="settings-panel" style="display:none;"></div>
 
   <!-- Partial transcript (live speech assembly) -->
   <div class="partial-transcript" id="partial-transcript" style="display:none;"></div>
@@ -455,49 +536,374 @@
 
   <div class="hint">For voice, use headphones. Speak naturally — the system detects when you start and stop. Speak during playback to interrupt.</div>
 
-  <!-- Substrate visibility panel (collapsed by default) -->
-  <details id="ops-panel" style="margin-top:8px; border:1px solid var(--border); border-radius:6px; background:var(--surface);">
-    <summary style="font-size:0.7rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; cursor:pointer; padding:6px 12px; user-select:none;">Substrate Status</summary>
-    <div style="padding:8px 12px 10px; font-size:0.75rem; font-family:monospace; display:grid; grid-template-columns:1fr 1fr; gap:8px;" id="ops-panel-body">
-      <!-- Kernel health -->
-      <div>
-        <div style="color:var(--muted); font-size:0.65rem; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Kernel (6931)</div>
-        <div id="ops-kernel-status">checking...</div>
-      </div>
-      <!-- Mod3 daemon health -->
-      <div>
-        <div style="color:var(--muted); font-size:0.65rem; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Mod3 Daemon</div>
-        <div id="ops-mod3-status">checking...</div>
-      </div>
-      <!-- Active seats -->
-      <div>
-        <div style="color:var(--muted); font-size:0.65rem; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Active Seats</div>
-        <div id="ops-seats">--</div>
-      </div>
-      <!-- Routing mode -->
-      <div>
-        <div style="color:var(--muted); font-size:0.65rem; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Routing</div>
-        <div id="ops-routing" style="color:var(--accent);">channel-client</div>
-      </div>
-      <!-- Recent channel events -->
-      <div style="grid-column:1/-1;">
-        <div style="color:var(--muted); font-size:0.65rem; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Recent Events (last 10)</div>
-        <div id="ops-events" style="max-height:100px; overflow-y:auto; color:var(--muted); font-size:0.7rem; line-height:1.6;">--</div>
-      </div>
+  </div><!-- end .main-pane -->
+
+  <!-- RIGHT: Side panel -->
+  <div class="side-panel" id="side-panel">
+    <div class="side-panel-tabs">
+      <span class="side-panel-tab active" data-tab="settings">Settings</span>
+      <span class="side-panel-tab" data-tab="traces">Traces</span>
+      <span class="side-panel-tab" data-tab="debug">Debug</span>
     </div>
-  </details>
-</div>
+    <div class="side-panel-content">
+
+      <!-- Settings tab: all mod3 configuration -->
+      <div class="side-panel-section active" id="tab-settings">
+
+        <!-- Transport section -->
+        <div style="margin-bottom:10px;">
+          <div style="font-size:0.7rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px;">Transport</div>
+          <div style="display:flex; gap:16px; align-items:center; flex-wrap:wrap;">
+            <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:0.85rem;">
+              <input type="radio" name="transport" id="transport-chat" value="chat"> /ws/chat (legacy)
+            </label>
+            <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:0.85rem;">
+              <input type="radio" name="transport" id="transport-acp" value="acp"> /ws/acp (ACP)
+            </label>
+            <span id="transport-reload-notice" style="display:none; font-size:0.7rem; color:var(--orange); margin-left:4px;">Reload page to apply</span>
+          </div>
+        </div>
+
+        <!-- Agent backend indicator -->
+        <div style="margin-bottom:10px; display:flex; align-items:center; gap:8px;">
+          <div style="font-size:0.7rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px;">Agent Backend</div>
+          <span id="agent-backend-badge" style="font-size:0.7rem; padding:2px 8px; border-radius:8px; border:1px solid var(--border); color:var(--muted); background:var(--bg);">checking...</span>
+        </div>
+
+        <!-- Inference backend selector -->
+        <div style="margin-bottom:10px;">
+          <div style="font-size:0.7rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px;">Inference Backend</div>
+          <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:end;">
+            <div class="form-group">
+              <label>Provider</label>
+              <select id="inference-backend">
+                <option value="lmstudio-eclipse" selected>lmstudio-eclipse (default)</option>
+                <option value="ollama">ollama</option>
+                <option value="lmstudio-darkstar">lmstudio-darkstar</option>
+                <option value="claude-code">claude-code</option>
+                <option value="codex">codex</option>
+                <option value="mlx-lm">mlx-lm</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Thinking</label>
+              <select id="inference-thinking">
+                <option value="off" selected>Off (fast foveal)</option>
+                <option value="on">On (reasoning)</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <!-- Voice synthesis section -->
+        <div style="margin-bottom:10px;">
+          <div style="font-size:0.7rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px;">Voice Synthesis</div>
+          <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:end;">
+            <div class="form-group">
+              <label>TTS Model</label>
+              <select id="voice-model">
+                <option value="kokoro" selected>Kokoro 82M (fast)</option>
+                <option value="voxtral">Voxtral 4B (quality)</option>
+                <option value="chatterbox">Chatterbox (clone)</option>
+                <option value="spark">Spark 0.5B</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Voice</label>
+              <select id="voice-voice">
+                <option value="">Loading voices…</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Speed</label>
+              <select id="tts-speed">
+                <option value="1.0">1.0x</option>
+                <option value="1.25" selected>1.25x</option>
+                <option value="1.5">1.5x</option>
+                <option value="2.0">2.0x</option>
+              </select>
+            </div>
+            <div class="form-group" id="emotion-group" style="display:none;">
+              <label>Emotion <span style="font-size:0.65rem; color:var(--muted);">(Chatterbox)</span></label>
+              <div style="display:flex; align-items:center; gap:6px;">
+                <input type="range" id="tts-emotion" min="0" max="1" step="0.05" value="0.5" style="width:80px; accent-color:var(--accent);">
+                <span id="tts-emotion-val" style="font-size:0.8rem; color:var(--muted); min-width:28px;">0.50</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- STT section -->
+        <div style="margin-bottom:10px;">
+          <div style="font-size:0.7rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px;">Speech Recognition</div>
+          <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:end;">
+            <div class="form-group">
+              <label>VAD Sensitivity</label>
+              <select id="vad-mode">
+                <option value="0.3">Very Sensitive</option>
+                <option value="0.5" selected>Normal</option>
+                <option value="0.7">Low (noisy room)</option>
+                <option value="0.85">Very Low</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <!-- Audio devices section -->
+        <div style="margin-bottom:10px;">
+          <div style="font-size:0.7rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px;">Audio Devices</div>
+          <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:end;">
+            <div class="form-group">
+              <label>Output Device</label>
+              <select id="audio-output">
+                <option value="">Default</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Input Device</label>
+              <select id="audio-input">
+                <option value="">Default</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <!-- Advanced (collapsible) -->
+        <details style="margin-bottom:6px;">
+          <summary style="font-size:0.7rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; cursor:pointer; user-select:none;">Advanced</summary>
+          <div style="margin-top:8px; display:flex; gap:12px; flex-wrap:wrap; align-items:end;">
+            <div class="form-group">
+              <label>Audio Sidecar Mode</label>
+              <select id="audio-sidecar-mode">
+                <option value="rtvi" selected>RTVI 1.3.0 (default)</option>
+                <option value="legacy">Legacy audio_header</option>
+              </select>
+            </div>
+          </div>
+        </details>
+
+        <!-- Mic connect button (moved from voice controls bar) -->
+        <div style="margin-top:10px; display:flex; gap:8px; align-items:center;">
+          <button style="background:none; border:1px solid var(--border); border-radius:4px; padding:4px 10px; color:var(--muted); cursor:pointer; font-size:0.75rem;" id="settings-mic-connect-btn" onclick="document.getElementById('voice-connect-btn').click()">&#127908; Connect Mic</button>
+          <span style="font-size:0.6rem; color:var(--muted);" id="mic-debug-2"></span>
+        </div>
+
+        <!-- Reset button -->
+        <div style="margin-top:8px;">
+          <button id="settings-reset-btn" style="background:none; border:1px solid var(--border); border-radius:4px; padding:4px 12px; color:var(--muted); cursor:pointer; font-size:0.75rem;">Reset to defaults</button>
+        </div>
+
+      </div><!-- end #tab-settings -->
+
+      <!-- Traces tab -->
+      <div class="side-panel-section" id="tab-traces">
+        <div style="color: var(--muted); font-size: 0.8rem; padding: 4px 0 8px;">Active session trace (Wave 1C)</div>
+        <div id="traces-tab-content" style="font-size:0.78rem; color:var(--muted);">Select a turn in the trace panel to see span details here.</div>
+      </div>
+
+      <!-- Debug tab -->
+      <div class="side-panel-section" id="tab-debug">
+        <div style="font-size:0.7rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px;">Substrate Status</div>
+        <div style="font-size:0.75rem; font-family:monospace; display:grid; grid-template-columns:1fr 1fr; gap:8px;" id="ops-panel-body">
+          <div>
+            <div style="color:var(--muted); font-size:0.65rem; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Kernel</div>
+            <div id="ops-kernel-status">checking...</div>
+          </div>
+          <div>
+            <div style="color:var(--muted); font-size:0.65rem; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Mod3 Daemon</div>
+            <div id="ops-mod3-status">checking...</div>
+          </div>
+          <div>
+            <div style="color:var(--muted); font-size:0.65rem; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Active Seats</div>
+            <div id="ops-seats">--</div>
+          </div>
+          <div>
+            <div style="color:var(--muted); font-size:0.65rem; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Routing</div>
+            <div id="ops-routing" style="color:var(--accent);">channel-client</div>
+          </div>
+          <div style="grid-column:1/-1;">
+            <div style="color:var(--muted); font-size:0.65rem; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Recent Events (last 10)</div>
+            <div id="ops-events" style="max-height:100px; overflow-y:auto; color:var(--muted); font-size:0.7rem; line-height:1.6;">--</div>
+          </div>
+        </div>
+        <div style="margin-top:12px; font-size:0.7rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Bus Event Stream (Wave 2G)</div>
+        <div id="debug-event-stream">Waiting for events...</div>
+      </div>
+
+    </div><!-- end .side-panel-content -->
+  </div><!-- end .side-panel -->
+
+</div><!-- end .shell -->
 
 <script>
-// --- Settings panel toggle ---
-document.getElementById('settings-toggle').addEventListener('click', () => {
-  const panel = document.getElementById('settings-panel');
-  panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
-});
+// --- Shell initialization — three-column layout + side panel tabs ---
+(function initShell() {
+  const SHELL_KEY = 'mod3.shell';
 
-// --- Substrate visibility panel ---
-// Polls kernel health, mod3 health, and seat count when the panel is open.
-// No dependencies — vanilla fetch + DOM updates only.
+  function loadShellState() {
+    try { return JSON.parse(localStorage.getItem(SHELL_KEY)) || {}; } catch { return {}; }
+  }
+  function saveShellState(s) {
+    try { localStorage.setItem(SHELL_KEY, JSON.stringify(s)); } catch {}
+  }
+
+  const shell = document.getElementById('shell');
+  const gearBtn = document.getElementById('gear-btn');
+  const tabs = document.querySelectorAll('.side-panel-tab');
+
+  const saved = loadShellState();
+  let open = saved.sidePanelOpen !== false; // default open
+  let activeTab = saved.activeTab || 'settings';
+
+  function applyShell() {
+    if (!shell) return;
+    shell.classList.toggle('side-panel-hidden', !open);
+    tabs.forEach(t => {
+      t.classList.toggle('active', t.dataset.tab === activeTab);
+    });
+    document.querySelectorAll('.side-panel-section').forEach(s => {
+      s.classList.toggle('active', s.id === 'tab-' + activeTab);
+    });
+  }
+
+  if (gearBtn) {
+    gearBtn.addEventListener('click', () => {
+      open = !open;
+      saveShellState({ sidePanelOpen: open, activeTab });
+      applyShell();
+    });
+  }
+
+  tabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+      activeTab = tab.dataset.tab;
+      open = true;
+      saveShellState({ sidePanelOpen: open, activeTab });
+      applyShell();
+      // Start debug polling when debug tab opened
+      if (activeTab === 'debug' && typeof window.__refreshOpsPanel === 'function') {
+        window.__refreshOpsPanel();
+      }
+    });
+  });
+
+  applyShell();
+})();
+
+// --- Status pills (kernel + mod3 health) ---
+(function initStatusPills() {
+  const KERNEL_URL = 'http://localhost:6931/v1/health';
+  const MOD3_HEALTH_URL = '/health';
+
+  function setPill(dotId, labelId, state, label) {
+    const dot = document.getElementById(dotId);
+    const lbl = document.getElementById(labelId);
+    if (dot) { dot.className = 'dot'; if (state) dot.classList.add(state); }
+    if (lbl) lbl.textContent = label;
+  }
+
+  async function pollPills() {
+    // Kernel pill
+    try {
+      const r = await fetch(KERNEL_URL, { signal: AbortSignal.timeout(2500) });
+      if (r.ok) {
+        const d = await r.json();
+        const ver = d.version ? ' v' + d.version : '';
+        setPill('pill-kernel-dot', 'pill-kernel-label', 'ok', 'kernel' + ver);
+      } else {
+        setPill('pill-kernel-dot', 'pill-kernel-label', 'warn', 'kernel ' + r.status);
+      }
+    } catch {
+      setPill('pill-kernel-dot', 'pill-kernel-label', 'err', 'kernel offline');
+    }
+    // Mod3 pill
+    try {
+      const r = await fetch(MOD3_HEALTH_URL, { signal: AbortSignal.timeout(2500) });
+      if (r.ok) {
+        const d = await r.json();
+        setPill('pill-mod3-dot', 'pill-mod3-label', d.status === 'ok' ? 'ok' : 'warn', 'mod3');
+      } else {
+        setPill('pill-mod3-dot', 'pill-mod3-label', 'err', 'mod3 ' + r.status);
+      }
+    } catch {
+      setPill('pill-mod3-dot', 'pill-mod3-label', 'err', 'mod3 offline');
+    }
+  }
+
+  pollPills();
+  setInterval(pollPills, 20000);
+})();
+
+// --- Inference backend selector (persisted) ---
+(function wireInferenceBackend() {
+  const BACKEND_KEY = 'mod3.inferenceBackend';
+  const THINKING_KEY = 'mod3.inferenceThinking';
+  const sel = document.getElementById('inference-backend');
+  const thinkSel = document.getElementById('inference-thinking');
+  if (sel) {
+    const saved = localStorage.getItem(BACKEND_KEY);
+    if (saved) sel.value = saved;
+    sel.addEventListener('change', () => {
+      try { localStorage.setItem(BACKEND_KEY, sel.value); } catch {}
+    });
+  }
+  if (thinkSel) {
+    const saved = localStorage.getItem(THINKING_KEY);
+    if (saved) thinkSel.value = saved;
+    thinkSel.addEventListener('change', () => {
+      try { localStorage.setItem(THINKING_KEY, thinkSel.value); } catch {}
+    });
+  }
+})();
+
+// --- Sessions sidebar rendering ---
+// The sidebar shows the same session list as the participants panel.
+// Populated by the setupSessionRegistration() polling below.
+window.__renderSessionsSidebar = function(sessions) {
+  const container = document.getElementById('sessions-sidebar-content');
+  if (!container) return;
+  const selfId = window.__mod3Session && window.__mod3Session.session_id;
+  // Update sessions count pill
+  const countPill = document.getElementById('pill-sessions-count');
+  if (countPill) countPill.textContent = String(sessions.length);
+  if (sessions.length === 0) {
+    container.innerHTML = '<div style="padding:12px; color:var(--muted); font-size:0.8rem;">No active sessions</div>';
+    return;
+  }
+  const sorted = [...sessions].sort((a, b) => {
+    if (a.session_id === selfId) return -1;
+    if (b.session_id === selfId) return 1;
+    return (b.registered_at || 0) - (a.registered_at || 0);
+  });
+  container.innerHTML = sorted.map(s => {
+    const isSelf = s.session_id === selfId;
+    const sid = s.session_id || '';
+    const pid = s.participant_id || sid;
+    const kind = (s.participant_type || 'agent').toLowerCase();
+    const ageSec = s.registered_at ? Math.round(Date.now()/1000 - s.registered_at) : 0;
+    const ageStr = ageSec < 60 ? ageSec + 's' : ageSec < 3600 ? Math.round(ageSec/60) + 'm' : Math.round(ageSec/3600) + 'h';
+    // Derive backend tag from participant_id heuristics
+    const backend = pid.includes('claude') ? 'claude-code (sonnet)' :
+                    pid.includes('dashboard') ? 'eclipse 26b' :
+                    kind === 'agent' ? 'kernel' : kind;
+    const displayId = pid.length > 20 ? pid.slice(0, 18) + '…' : pid;
+    return (
+      '<div class="sidebar-session-row' + (isSelf ? ' active' : '') + '" data-sid="' + sid + '">' +
+        '<span class="sidebar-session-dot' + (isSelf ? ' active' : '') + '"></span>' +
+        '<div class="sidebar-session-info">' +
+          '<div class="sidebar-session-id">' + displayId + '</div>' +
+          '<div class="sidebar-session-meta">' +
+            '<span class="sidebar-session-backend">' + backend + '</span>' +
+            '<span>' + ageStr + '</span>' +
+          '</div>' +
+        '</div>' +
+      '</div>'
+    );
+  }).join('');
+};
+
+// --- Substrate visibility panel (debug tab) ---
+// Polls when debug tab is active; exposed as window.__refreshOpsPanel.
 (function opsPanelSetup() {
   const KERNEL_URL = 'http://localhost:6931/v1/health';
   const MOD3_HEALTH_URL = '/health';
@@ -589,20 +995,10 @@ document.getElementById('settings-toggle').addEventListener('click', () => {
     await Promise.all([pollKernel(), pollMod3(), pollSeats()]);
   }
 
-  // Poll when the panel is open; stop when closed.
-  let _opsInterval = null;
-  const opsPanel = document.getElementById('ops-panel');
-  if (opsPanel) {
-    opsPanel.addEventListener('toggle', () => {
-      if (opsPanel.open) {
-        refreshAll();
-        _opsInterval = setInterval(refreshAll, 5000);
-      } else {
-        clearInterval(_opsInterval);
-        _opsInterval = null;
-      }
-    });
-  }
+  // Poll on a fixed interval; also exposed for on-demand refresh when debug tab opens.
+  window.__refreshOpsPanel = refreshAll;
+  refreshAll();
+  setInterval(refreshAll, 30000);
 
   // Expose addEvent so the WS handler can push channel events here.
   window.__mod3OpsEvent = addEvent;
@@ -1273,7 +1669,8 @@ chatInput.addEventListener('input', () => {
 
   async function registerSession() {
     // Reuse cached session if present — refreshes stay on the same identity.
-    const cached = sessionStorage.getItem(SESSION_KEY);
+    // localStorage (not sessionStorage) so session persists across full browser refreshes.
+    const cached = localStorage.getItem(SESSION_KEY);
     const reuseId = cached ? JSON.parse(cached) : null;
 
     const participantId = (reuseId && reuseId.participant_id) ||
@@ -1345,7 +1742,7 @@ chatInput.addEventListener('input', () => {
       registered: true,
     };
 
-    sessionStorage.setItem(SESSION_KEY, JSON.stringify({
+    localStorage.setItem(SESSION_KEY, JSON.stringify({
       session_id: data.session_id,
       participant_id: data.participant_id || participantId,
     }));
@@ -1377,9 +1774,15 @@ chatInput.addEventListener('input', () => {
     const listEl = document.getElementById('participants-list');
     const countEl = document.getElementById('participants-count');
     const pluralEl = document.getElementById('participants-plural');
-    if (!listEl || !countEl) return;
 
     const selfId = window.__mod3Session && window.__mod3Session.session_id;
+
+    // Update sessions sidebar (new shell)
+    if (typeof window.__renderSessionsSidebar === 'function') {
+      window.__renderSessionsSidebar(sessions);
+    }
+
+    if (!listEl || !countEl) return;
 
     countEl.textContent = String(sessions.length);
     if (pluralEl) pluralEl.textContent = sessions.length === 1 ? '' : 's';
