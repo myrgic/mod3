@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 import httpx
 
 from bus import ModalityBus
-from chat_flow_log import get_chat_flow_log, phase_timer
+from chat_flow_log import phase_timer
 from draft_queue import DraftQueue
 from modality import CognitiveEvent, CognitiveIntent, ModalityType
 from pipeline_state import PipelineState

@@ -9,7 +9,9 @@ Run: python -m pytest tests/test_stt_dedup.py -v
 
 from __future__ import annotations
 
+import hashlib
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -199,18 +201,13 @@ def test_performance_5000_chars():
     Uses a hash-derived pseudo-random word stream so no two consecutive sentences
     or global repetition patterns can trigger any dedup strategy.
     """
-    import time
-
-    # Generate a unique stream of words using a hash so there is no repetition.
-    import hashlib
-
     words = [
         hashlib.md5(f"w{i}".encode()).hexdigest()[:6]
         for i in range(200)
     ]
     # Join into sentences of 8 words each — each sentence is unique.
     sentences = [
-        " ".join(words[i:i+8]) + "."
+        " ".join(words[i:i + 8]) + "."
         for i in range(0, len(words) - 8, 8)
     ]
     long_text = " ".join(sentences)[:5000]
