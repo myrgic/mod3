@@ -204,17 +204,6 @@ class AgentLoop:
         system_prompt = self._inject_pending_bargein(system_prompt)
 
         _agent_dispatch_ms = int((time.perf_counter() - t_start) * 1000)
-        try:
-            from chat_flow_log import get_chat_flow_log
-
-            get_chat_flow_log().emit_phase(
-                phase_name="agent_dispatch",
-                session_id=_session_id,
-                message_id=_msg_id,
-                duration_ms=_agent_dispatch_ms,
-            )
-        except Exception:  # noqa: BLE001
-            pass
 
         # --- Phase: provider_call -------------------------------------------
         # Emit provider_call phase manually so we can attach the trace_id from
@@ -230,10 +219,24 @@ class AgentLoop:
         )
         _provider_call_ms = int((time.perf_counter() - t_provider_start) * 1000)
         t_llm = float(_provider_call_ms)
+        # Extract the trace_id set by CogOSProvider — propagate to ALL phase
+        # events in this turn so the trace panel can correlate them with the
+        # kernel's bus_traces sub-spans that share the same W3C trace_id.
         _provider_trace_id: str | None = None
         if isinstance(response.raw, dict):
             _provider_trace_id = response.raw.get("_mod3_trace_id")
+
         try:
+            from chat_flow_log import get_chat_flow_log
+
+            # Emit agent_dispatch now (after provider call so we have trace_id).
+            get_chat_flow_log().emit_phase(
+                phase_name="agent_dispatch",
+                session_id=_session_id,
+                message_id=_msg_id,
+                duration_ms=_agent_dispatch_ms,
+                trace_id=_provider_trace_id,
+            )
             get_chat_flow_log().emit_phase(
                 "provider_call",
                 _session_id,
@@ -256,7 +259,7 @@ class AgentLoop:
                 mode = tc.arguments.get("mode", "audio")
                 if text:
                     assistant_parts.append(text)
-                    async with phase_timer("tool_execute", _session_id, _msg_id):
+                    async with phase_timer("tool_execute", _session_id, _msg_id, trace_id=_provider_trace_id):
                         # Text path: send to dashboard chat panel
                         if mode in ("text", "both"):
                             if self._channel_ref:
@@ -287,7 +290,7 @@ class AgentLoop:
                 text = tc.arguments.get("text", "")
                 if text:
                     assistant_parts.append(text)
-                    async with phase_timer("tool_execute", _session_id, _msg_id):
+                    async with phase_timer("tool_execute", _session_id, _msg_id, trace_id=_provider_trace_id):
                         # Show text in chat panel
                         if self._channel_ref:
                             await self._channel_ref.send_response_text(text)
@@ -316,7 +319,7 @@ class AgentLoop:
                 text = tc.arguments.get("content", "") or tc.arguments.get("text", "")
                 if text:
                     assistant_parts.append(text)
-                    async with phase_timer("tool_execute", _session_id, _msg_id):
+                    async with phase_timer("tool_execute", _session_id, _msg_id, trace_id=_provider_trace_id):
                         if self._channel_ref:
                             await self._channel_ref.send_response_text(text)
 
@@ -324,7 +327,7 @@ class AgentLoop:
         if not response.tool_calls and response.text:
             text = response.text
             assistant_parts.append(text)
-            async with phase_timer("tool_execute", _session_id, _msg_id):
+            async with phase_timer("tool_execute", _session_id, _msg_id, trace_id=_provider_trace_id):
                 if self._channel_ref:
                     await self._channel_ref.send_response_text(text)
                 intent = CognitiveIntent(
@@ -363,6 +366,7 @@ class AgentLoop:
                 session_id=_session_id,
                 message_id=_msg_id,
                 duration_ms=_turn_total_ms,
+                trace_id=_provider_trace_id,
             )
         except Exception:  # noqa: BLE001
             pass
