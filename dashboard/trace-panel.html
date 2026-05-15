@@ -314,17 +314,19 @@ function connectMod3() {
     })
     .catch(() => {});
 
-  // Then stream new events
+  // Then stream new events.
+  // The mod3 SSE endpoint sends named events: `event: chat_flow` + `data: ...`
+  // Named events do NOT fire `onmessage` — they require addEventListener().
   const es = new EventSource(MOD3_URL + '/v1/logs/chat-flow/stream');
   es.onopen = () => { dot.className = 'dot ok'; label.textContent = 'mod3 live'; };
   es.onerror = () => { dot.className = 'dot err'; label.textContent = 'mod3 disconnected'; };
-  es.onmessage = (e) => {
+  es.addEventListener('chat_flow', (e) => {
     if (paused) return;
     try {
       const ev = JSON.parse(e.data);
       processMod3Event(ev);
     } catch {}
-  };
+  });
   return es;
 }
 
@@ -504,14 +506,14 @@ function renderAll() {
   // Remove all turn cards (simple full re-render; fine for ≤100 turns)
   Array.from(container.querySelectorAll('.turn-card')).forEach(el => el.remove());
 
-  // Append (reversed = newest at top)
+  // Append (reversed = newest at top).
+  // Insert each card before the empty-state div so newest turns appear at top.
   for (const t of visible) {
     const card = buildTurnCard(t);
-    container.insertBefore(card, container.firstChild === empty ? null : empty.nextSibling);
-    container.insertBefore(card, empty.nextSibling);
+    container.insertBefore(card, empty);
   }
 
-  // Ensure empty state is last
+  // Ensure empty state is last (it may have been displaced by insertBefore).
   container.appendChild(empty);
 
   // Update counters
