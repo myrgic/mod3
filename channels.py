@@ -657,6 +657,13 @@ class BrowserChannel:
         _stt_capture_t0 = time.perf_counter()
         _msg_id = ""  # voice path has no message_id until after STT
 
+        # Per-utterance correlation ID — generated here (before any phase events)
+        # so that stt_capture, stt_transcribe, and all downstream phase events
+        # (agent_dispatch, provider_call, tool_execute, tts_synthesize,
+        # tts_playback_start) all share the same trace_id for this turn.
+        # The agent loop propagates it forward via event.metadata["utterance_trace_id"].
+        _utterance_trace_id: str = uuid.uuid4().hex
+
         # Transcribe via mlx_whisper — needs a temp WAV file
         def _transcribe():
             import io
@@ -736,12 +743,13 @@ class BrowserChannel:
                 session_id=self.channel_id,
                 message_id=_msg_id,
                 duration_ms=_stt_capture_ms,
+                trace_id=_utterance_trace_id,
             )
         except Exception:  # noqa: BLE001
             pass
 
         try:
-            async with phase_timer("stt_transcribe", self.channel_id, _msg_id):
+            async with phase_timer("stt_transcribe", self.channel_id, _msg_id, trace_id=_utterance_trace_id):
                 event = await loop.run_in_executor(_STT_EXECUTOR, _transcribe)
         except Exception as exc:  # noqa: BLE001
             logger.error("STT executor error: %s", exc)
@@ -761,8 +769,11 @@ class BrowserChannel:
                 source="voice",
             )
             await self.ws.send_json(frame.model_dump(exclude_none=True))
-            # Forward to agent loop
+            # Forward to agent loop — include utterance trace_id so the agent
+            # can propagate it to agent_dispatch, provider_call, tool_execute,
+            # tts_synthesize, and tts_playback_start phase events for this turn.
             event.metadata["stt_ms"] = stt_ms
+            event.metadata["utterance_trace_id"] = _utterance_trace_id
             if self._on_event:
                 await self._on_event(event)
 
