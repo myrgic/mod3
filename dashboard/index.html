@@ -863,7 +863,7 @@
 
 // --- Status pills (kernel + mod3 health) ---
 (function initStatusPills() {
-  const KERNEL_URL = 'http://localhost:6931/v1/health';
+  const KERNEL_URL = 'http://localhost:6931/health';
   const MOD3_HEALTH_URL = '/health';
 
   function setPill(dotId, labelId, state, label) {
@@ -1029,7 +1029,7 @@ window.__renderSessionsSidebar = function(sessions) {
 // --- Substrate visibility panel (debug tab) ---
 // Polls when debug tab is active; exposed as window.__refreshOpsPanel.
 (function opsPanelSetup() {
-  const KERNEL_URL = 'http://localhost:6931/v1/health';
+  const KERNEL_URL = 'http://localhost:6931/health';
   const MOD3_HEALTH_URL = '/health';
   const SEATS_URL_FN = () => {
     // Use a fixed session id "main" for the seat count probe.

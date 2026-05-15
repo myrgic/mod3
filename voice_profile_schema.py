@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import pathlib
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
+from typing import List, Optional
 
 
 @dataclass
@@ -15,6 +16,13 @@ class VoiceProfile:
     exaggeration: float
     model_id: str
     created_at: str
+    # --- curation metadata (added 2026-05-15) ---
+    # Missing fields in pre-existing JSON files are filled with defaults on load.
+    favorite: bool = False
+    notes: str = ""
+    tags: List[str] = field(default_factory=list)
+    last_used_at: Optional[str] = None
+    rating: Optional[int] = None
 
     @classmethod
     def from_json(cls, data: dict) -> "VoiceProfile":
@@ -27,6 +35,12 @@ class VoiceProfile:
             exaggeration=data["exaggeration"],
             model_id=data["model_id"],
             created_at=data["created_at"],
+            # curation fields — backward-compat defaults when absent
+            favorite=data.get("favorite", False),
+            notes=data.get("notes", ""),
+            tags=data.get("tags", []),
+            last_used_at=data.get("last_used_at", None),
+            rating=data.get("rating", None),
         )
 
     def to_json(self) -> dict:

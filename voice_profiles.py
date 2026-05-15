@@ -13,9 +13,23 @@ import datetime
 import json
 import pathlib
 import re
+import threading
+from typing import Any
 
 from voice_profile_io import load_conditionals, save_conditionals
 from voice_profile_schema import VoiceProfile, compute_source_sha256
+
+# Per-file locks for atomic JSON updates
+_file_locks: dict[str, threading.Lock] = {}
+_file_locks_lock = threading.Lock()
+
+
+def _get_file_lock(path: pathlib.Path) -> threading.Lock:
+    key = str(path)
+    with _file_locks_lock:
+        if key not in _file_locks:
+            _file_locks[key] = threading.Lock()
+        return _file_locks[key]
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
@@ -152,6 +166,62 @@ class VoiceProfileRegistry:
             p.stem for p in self._root.glob("*.json") if (self._root / p.stem).with_suffix(".safetensors").exists()
         )
         return stems
+
+    # ------------------------------------------------------------------
+    # Curation metadata patch
+    # ------------------------------------------------------------------
+
+    _CURATION_FIELDS = frozenset({"favorite", "notes", "tags", "last_used_at", "rating"})
+
+    def patch_metadata(self, name: str, updates: dict[str, Any]) -> VoiceProfile | None:
+        """Atomically update curation metadata fields on an existing profile.
+
+        Only the fields in ``_CURATION_FIELDS`` may be patched.  Unrecognised
+        keys are silently ignored.  Returns the updated VoiceProfile, or None
+        if the profile does not exist.
+
+        Raises:
+            ValueError: rating out of range (must be None or 1-5).
+        """
+        json_path = self._root / f"{name}.json"
+        safetensors_path = json_path.with_suffix(".safetensors")
+        if not json_path.exists() or not safetensors_path.exists():
+            return None
+
+        if "rating" in updates and updates["rating"] is not None:
+            r = updates["rating"]
+            if not isinstance(r, int) or r < 1 or r > 5:
+                raise ValueError(f"rating must be an integer 1-5 or null, got {r!r}")
+
+        lock = _get_file_lock(json_path)
+        with lock:
+            data = json.loads(json_path.read_text())
+            for field in self._CURATION_FIELDS:
+                if field in updates:
+                    data[field] = updates[field]
+            json_path.write_text(json.dumps(data, indent=2))
+
+        return VoiceProfile.from_json(data)
+
+    def update_last_used_at(self, name: str) -> None:
+        """Record the current UTC timestamp as last_used_at for the named profile.
+
+        No-op if the profile does not exist.  Writes atomically under a per-file lock.
+        """
+        json_path = self._root / f"{name}.json"
+        safetensors_path = json_path.with_suffix(".safetensors")
+        if not json_path.exists() or not safetensors_path.exists():
+            return
+
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        lock = _get_file_lock(json_path)
+        with lock:
+            try:
+                data = json.loads(json_path.read_text())
+                data["last_used_at"] = now
+                json_path.write_text(json.dumps(data, indent=2))
+            except Exception:
+                pass  # never break synthesis over a metadata write
 
     # ------------------------------------------------------------------
     # Delete path

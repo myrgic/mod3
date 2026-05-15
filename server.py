@@ -701,6 +701,16 @@ def _run_speech_job(entry: dict) -> None:
     _jobs[job_id]["engine"] = engine
     _jobs[job_id]["voice"] = resolved_voice
     _jobs[job_id]["player"] = player
+
+    # Update last_used_at for registered voice profiles (fire-and-forget;
+    # update_last_used_at is a no-op for built-in voices).
+    try:
+        from voice_profiles import VoiceProfileRegistry  # noqa: PLC0415
+
+        VoiceProfileRegistry().update_last_used_at(resolved_voice)
+    except Exception:  # noqa: BLE001
+        pass
+
     _set_bus_voice_state(
         status=ModuleStatus.ENCODING,
         active_job=job_id,
