@@ -99,14 +99,14 @@
   .turn-chevron { margin-left: auto; font-size: 0.7rem; color: var(--muted); transition: transform 0.15s; }
   .turn-chevron.open { transform: rotate(90deg); }
 
-  /* Timeline bar */
+  /* Timeline bar — two rows: main phases (top) + kernel sub-spans (bottom) */
   .timeline-wrapper { padding: 10px 12px; overflow-x: auto; }
   .timeline {
-    position: relative; height: 36px; background: var(--bg);
+    position: relative; height: 42px; background: var(--bg);
     border-radius: 4px; overflow: visible; min-width: 300px;
   }
   .phase-bar {
-    position: absolute; top: 6px; height: 24px; border-radius: 3px;
+    position: absolute; top: 4px; height: 22px; border-radius: 3px;
     display: flex; align-items: center; justify-content: center;
     font-size: 0.62rem; font-weight: 600; color: rgba(0,0,0,0.85);
     overflow: hidden; white-space: nowrap; cursor: default;
@@ -114,6 +114,10 @@
     box-shadow: 0 1px 3px rgba(0,0,0,0.4);
   }
   .phase-bar:hover { opacity: 0.85; z-index: 10; }
+  /* Kernel sub-spans occupy the lower row */
+  .phase-bar.kernel-span {
+    top: 28px; height: 10px; opacity: 0.75; font-size: 0px;
+  }
   .phase-bar.speculative {
     background: repeating-linear-gradient(
       45deg, var(--phase-speculative), var(--phase-speculative) 4px,
@@ -260,6 +264,17 @@ let kernelEvents = 0;
 // Map from message_id → turn group index
 const msgIdToTurn = {};
 
+// ── Expand-state preservation ─────────────────────────────────────────────────
+// Set of turn keys that the operator has explicitly expanded or collapsed.
+// Key = stable turn identifier (messageId if present, else "t<idx>").
+// Value: true = expanded, false = collapsed (explicit operator choice).
+const expandedByOp = new Map(); // key → boolean (op-explicit)
+let newestTurnKey = null;       // auto-expand only the most recent turn
+
+function turnKey(t) {
+  return t.messageId || ('t' + t.idx);
+}
+
 // ── Phase color map ───────────────────────────────────────────────────────────
 const PHASE_COLORS = {
   'stt_capture':          'var(--phase-stt)',
@@ -348,17 +363,38 @@ function connectKernel() {
 }
 
 // ── TurnGroup management ──────────────────────────────────────────────────────
+// Clustering window for voice-path turns (no message_id): 30 seconds.
+const VOICE_CLUSTER_WINDOW_MS = 30_000;
+
 function getOrCreateTurn(messageId, sessionId, ts) {
+  // 1. Stable message_id match — always wins.
   if (messageId && msgIdToTurn[messageId] != null) {
     return turns[msgIdToTurn[messageId]];
   }
-  // New turn
+
+  // 2. Voice path (empty messageId): cluster by session + timestamp proximity.
+  //    This prevents one utterance from spawning 8 separate turns when
+  //    historical events are loaded and all have messageId = "".
+  if (!messageId && ts) {
+    const evTime = new Date(ts).getTime();
+    for (let i = turns.length - 1; i >= 0; i--) {
+      const t = turns[i];
+      if (t.messageId) continue; // skip message-id turns
+      if (t.sessionId !== (sessionId || '')) continue;
+      const tTime = new Date(t.ts).getTime();
+      if (Math.abs(evTime - tTime) <= VOICE_CLUSTER_WINDOW_MS) {
+        return t;
+      }
+    }
+  }
+
+  // 3. New turn.
   const t = {
     idx:       ++turnIndex,
     messageId: messageId || null,
     sessionId: sessionId || '',
     ts:        ts || new Date().toISOString(),
-    phases:    [],      // {name, duration_ms, ok, tokens}
+    phases:    [],      // {name, duration_ms, ts, ok, tokens, trace_id}
     kernelSpans: [],    // kernel sub-spans from bus_traces
     toolCalls: [],      // tool call records (from tool_execute phases)
     speculative: null,  // {text, bargein_ms, text_offset}
@@ -366,6 +402,10 @@ function getOrCreateTurn(messageId, sessionId, ts) {
   };
   turns.push(t);
   if (messageId) msgIdToTurn[messageId] = turns.length - 1;
+
+  // Track newest key for auto-expand logic.
+  newestTurnKey = turnKey(t);
+
   return t;
 }
 
@@ -382,6 +422,7 @@ function processMod3Event(ev) {
     const entry = {
       name:        phaseName,
       duration_ms: ev.duration_ms,
+      ts:          ts,           // wall-clock end timestamp for Gantt positioning
       ok:          ev.ok !== false,
       tokens:      ev.tokens || null,
       trace_id:    ev.trace_id || null,
@@ -474,6 +515,61 @@ function processKernelEvent(block) {
   }
 }
 
+// ── Gantt timeline helpers ────────────────────────────────────────────────────
+// Compute wall-clock–based left/width percentages for a phase bar.
+// Phase events carry `ts` (ISO end timestamp) and `duration_ms`.
+// Turn origin = earliest (ts - duration_ms) across all phases.
+// If ts is missing for some phases, fall back to sequential layout.
+
+function computeTimelineLayout(t) {
+  const phases = t.phases.filter(p => p.duration_ms > 0);
+  if (phases.length === 0) return { useWallClock: false, turnStartMs: 0, spanMs: 1 };
+
+  // Check if all phases have ts fields
+  const allHaveTs = phases.every(p => p.ts);
+
+  if (!allHaveTs) {
+    return { useWallClock: false, turnStartMs: 0, spanMs: t.totalMs || phases.reduce((s, p) => s + (p.duration_ms || 0), 0) || 1 };
+  }
+
+  // Wall-clock layout: derive start time from (end_ts - duration_ms)
+  let earliest = Infinity;
+  let latest   = -Infinity;
+  for (const p of phases) {
+    const endMs   = new Date(p.ts).getTime();
+    const startMs = endMs - (p.duration_ms || 0);
+    if (startMs < earliest) earliest = startMs;
+    if (endMs   > latest)   latest   = endMs;
+  }
+
+  // Also account for turn_total if present
+  if (t.totalMs) {
+    // The turn_total end-time should be close to latest; use it to anchor span
+    const totalPhase = t.phases.find(p => p.name === 'turn_total');
+    if (totalPhase && totalPhase.ts) {
+      const totalEnd = new Date(totalPhase.ts).getTime();
+      if (totalEnd > latest) latest = totalEnd;
+    }
+  }
+
+  const spanMs = Math.max(latest - earliest, 1);
+  return { useWallClock: true, turnStartMs: earliest, spanMs };
+}
+
+function phaseBarPosition(p, layout) {
+  if (!layout.useWallClock || !p.ts) {
+    return null; // caller uses sequential fallback
+  }
+  const endMs   = new Date(p.ts).getTime();
+  const startMs = endMs - (p.duration_ms || 0);
+  const leftPct  = Math.max(0, Math.min(((startMs - layout.turnStartMs) / layout.spanMs) * 100, 98));
+  const widthPct = Math.max((p.duration_ms / layout.spanMs) * 100, 0.3);
+  return {
+    leftPct,
+    widthPct: Math.min(widthPct, 100 - leftPct),
+  };
+}
+
 // ── Render ────────────────────────────────────────────────────────────────────
 let renderScheduled = false;
 function scheduleRender() {
@@ -503,17 +599,52 @@ function renderAll() {
     empty.style.display = 'none';
   }
 
-  // Remove all turn cards (simple full re-render; fine for ≤100 turns)
-  Array.from(container.querySelectorAll('.turn-card')).forEach(el => el.remove());
+  // Diff-based render: update existing cards in place, add/remove as needed.
+  // Strategy: build a map of existing card elements by turn key, then reconcile.
+  const existingCards = new Map();
+  Array.from(container.querySelectorAll('.turn-card')).forEach(el => {
+    const k = el.dataset.turnKey;
+    if (k) existingCards.set(k, el);
+  });
 
-  // Append (reversed = newest at top).
-  // Insert each card before the empty-state div so newest turns appear at top.
-  for (const t of visible) {
-    const card = buildTurnCard(t);
-    container.insertBefore(card, empty);
+  // Keys that should be in the view
+  const visibleKeys = new Set(visible.map(turnKey));
+
+  // Remove cards no longer in view
+  for (const [k, el] of existingCards) {
+    if (!visibleKeys.has(k)) {
+      el.remove();
+      existingCards.delete(k);
+    }
   }
 
-  // Ensure empty state is last (it may have been displaced by insertBefore).
+  // Rebuild each visible turn card.
+  // We always rebuild the card DOM (it's cheap for ≤100 turns) but preserve
+  // expand state by reading/writing expandedByOp before and after.
+  const fragment = document.createDocumentFragment();
+  for (const t of visible) {
+    const k = turnKey(t);
+    // Determine expand state:
+    //   - operator explicitly toggled → honour it
+    //   - newest turn → auto-expand (unless operator collapsed it)
+    //   - all others → collapsed
+    let shouldExpand = false;
+    if (expandedByOp.has(k)) {
+      shouldExpand = expandedByOp.get(k);
+    } else {
+      shouldExpand = (k === newestTurnKey);
+    }
+
+    const card = buildTurnCard(t, shouldExpand);
+    fragment.appendChild(card);
+  }
+
+  // Remove remaining stale cards (before empty state)
+  Array.from(container.querySelectorAll('.turn-card')).forEach(el => el.remove());
+
+  container.insertBefore(fragment, empty);
+
+  // Ensure empty state is last.
   container.appendChild(empty);
 
   // Update counters
@@ -521,24 +652,24 @@ function renderAll() {
     `${mod3Events} mod3 events / ${kernelEvents} kernel spans / ${turns.length} turns`;
 }
 
-function buildTurnCard(t) {
+function buildTurnCard(t, initiallyExpanded) {
   const card = document.createElement('div');
   card.className = 'turn-card';
+  card.dataset.turnKey = turnKey(t);
 
-  // Compute timeline layout
-  const allPhases = [...t.phases, ...t.kernelSpans];
-  const totalMs = t.totalMs || allPhases.reduce((s, p) => s + (p.duration_ms || 0), 0) || 1;
+  // Compute wall-clock Gantt layout
+  const layout = computeTimelineLayout(t);
 
   // Header
   const hdr = document.createElement('div');
-  hdr.className = 'turn-header';
+  hdr.className = 'turn-header' + (initiallyExpanded ? ' expanded' : '');
   hdr.innerHTML = `
     <span class="turn-idx">#${t.idx}</span>
     <span class="turn-ts">${fmtTs(t.ts)}</span>
     <span class="turn-session">${shortSession(t.sessionId)}</span>
     <span style="flex:1"></span>
     <span class="turn-total-ms">${fmtMs(t.totalMs)}</span>
-    <span class="turn-chevron">▶</span>
+    <span class="turn-chevron${initiallyExpanded ? ' open' : ''}">▶</span>
   `;
   card.appendChild(hdr);
 
@@ -550,13 +681,24 @@ function buildTurnCard(t) {
   timelineWrap.appendChild(timeline);
   card.appendChild(timelineWrap);
 
-  // Render phase bars
-  let cursor = 0; // cumulative offset in ms
+  // Render main phase bars (wall-clock or sequential fallback)
+  let cursor = 0; // sequential cursor (fallback)
+  const spanMs = layout.spanMs;
+
   for (const p of t.phases) {
     const dur = p.duration_ms || 0;
     if (dur <= 0) { cursor += dur; continue; }
-    const leftPct  = Math.min((cursor / totalMs) * 100, 98);
-    const widthPct = Math.max((dur / totalMs) * 100, 0.3);
+
+    let leftPct, widthPct;
+    const pos = phaseBarPosition(p, layout);
+    if (pos) {
+      leftPct  = pos.leftPct;
+      widthPct = pos.widthPct;
+    } else {
+      leftPct  = Math.min((cursor / spanMs) * 100, 98);
+      widthPct = Math.max((dur / spanMs) * 100, 0.3);
+    }
+
     const bar = document.createElement('div');
     bar.className = 'phase-bar';
     bar.style.left  = leftPct + '%';
@@ -568,36 +710,69 @@ function buildTurnCard(t) {
     cursor += dur;
   }
 
-  // Kernel sub-spans (stacked below main phases, slightly offset)
+  // Kernel sub-spans: secondary row (lower half of timeline, under provider_call)
+  // Use wall-clock positioning relative to turn start if available.
+  // Kernel spans don't have individual ts fields from the bus, so we position
+  // them relative to the provider_call bar when possible.
+  const providerPhase = t.phases.find(p => p.name === 'provider_call');
+  let kOriginMs = layout.turnStartMs; // default: same origin as turn
+  if (layout.useWallClock && providerPhase && providerPhase.ts) {
+    // Provider call start = end_ts - duration_ms
+    kOriginMs = new Date(providerPhase.ts).getTime() - (providerPhase.duration_ms || 0);
+  }
+
   let kcursor = 0;
   for (const k of t.kernelSpans) {
     const dur = k.duration_ms || 0;
     if (dur <= 0) { kcursor += dur; continue; }
-    const leftPct  = Math.min((kcursor / totalMs) * 100, 98);
-    const widthPct = Math.max((dur / totalMs) * 100, 0.3);
+
+    let leftPct, widthPct;
+    if (layout.useWallClock && providerPhase) {
+      // Relative to turn start using provider_call offset as anchor
+      const kStart = kOriginMs + kcursor - layout.turnStartMs;
+      leftPct  = Math.max(0, Math.min((kStart / layout.spanMs) * 100, 98));
+      widthPct = Math.max((dur / layout.spanMs) * 100, 0.3);
+    } else {
+      leftPct  = Math.min((kcursor / spanMs) * 100, 98);
+      widthPct = Math.max((dur / spanMs) * 100, 0.3);
+    }
+
     const bar = document.createElement('div');
-    bar.className = 'phase-bar';
-    bar.style.left    = leftPct + '%';
-    bar.style.width   = Math.min(widthPct, 100 - leftPct) + '%';
-    bar.style.top     = '18px';
-    bar.style.height  = '10px';
+    bar.className = 'phase-bar kernel-span';
+    bar.style.left       = leftPct + '%';
+    bar.style.width      = Math.min(widthPct, 100 - leftPct) + '%';
     bar.style.background = phaseColor(k.name);
-    bar.style.opacity = '0.7';
     attachTooltip(bar, k);
     timeline.appendChild(bar);
     kcursor += dur;
   }
 
-  // Speculative block bar (hatched, after solidified content)
+  // Speculative block bar (hatched, spans remaining width after last main phase end)
   if (t.speculative) {
-    const solidPct = Math.min((cursor / totalMs) * 100, 98);
+    // Use wall-clock position of the last phase end if available
+    let solidPct = 90; // safe default
+    if (layout.useWallClock && t.phases.length > 0) {
+      // Find latest end timestamp among main phases
+      let latestEnd = -Infinity;
+      for (const p of t.phases) {
+        if (p.ts) {
+          const endMs = new Date(p.ts).getTime();
+          if (endMs > latestEnd) latestEnd = endMs;
+        }
+      }
+      if (latestEnd > -Infinity) {
+        solidPct = Math.min(((latestEnd - layout.turnStartMs) / layout.spanMs) * 100, 98);
+      }
+    } else {
+      solidPct = Math.min((cursor / spanMs) * 100, 98);
+    }
     const specWidth = Math.max(100 - solidPct - 1, 2);
     const specBar = document.createElement('div');
     specBar.className = 'phase-bar speculative';
-    specBar.style.left  = solidPct + '%';
-    specBar.style.width = specWidth + '%';
-    specBar.style.top   = '6px';
-    specBar.style.height = '24px';
+    specBar.style.left   = solidPct + '%';
+    specBar.style.width  = specWidth + '%';
+    specBar.style.top    = '4px';
+    specBar.style.height = '22px';
     const specData = t.speculative;
     attachTooltipContent(specBar, {
       title: 'Speculative Output (unsaid)',
@@ -613,7 +788,7 @@ function buildTurnCard(t) {
   // Expandable detail
   const detail = document.createElement('div');
   detail.className = 'turn-detail';
-  detail.style.display = 'none';
+  detail.style.display = initiallyExpanded ? 'flex' : 'none';
 
   // Phase list
   const allForDetail = [...t.phases, ...t.kernelSpans];
@@ -692,13 +867,17 @@ function buildTurnCard(t) {
 
   card.appendChild(detail);
 
-  // Toggle expand
+  // Toggle expand — record operator choice in expandedByOp
   const chevron = hdr.querySelector('.turn-chevron');
+  const k = turnKey(t);
   hdr.addEventListener('click', () => {
     const open = detail.style.display !== 'none';
-    detail.style.display = open ? 'none' : 'flex';
-    hdr.classList.toggle('expanded', !open);
-    chevron.classList.toggle('open', !open);
+    const nowOpen = !open;
+    detail.style.display = nowOpen ? 'flex' : 'none';
+    hdr.classList.toggle('expanded', nowOpen);
+    chevron.classList.toggle('open', nowOpen);
+    // Record explicit operator choice
+    expandedByOp.set(k, nowOpen);
   });
 
   return card;
@@ -767,6 +946,8 @@ document.getElementById('pause-btn').addEventListener('click', (e) => {
 document.getElementById('clear-btn').addEventListener('click', () => {
   turns.length = 0;
   Object.keys(msgIdToTurn).forEach(k => delete msgIdToTurn[k]);
+  expandedByOp.clear();
+  newestTurnKey = null;
   turnIndex = 0;
   mod3Events = 0;
   kernelEvents = 0;
