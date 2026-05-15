@@ -1050,6 +1050,30 @@ document.getElementById('session-filter').addEventListener('input', renderAll);
 document.getElementById('max-turns').addEventListener('change', renderAll);
 document.getElementById('span-filter').addEventListener('input', renderAll);
 
+// ── Keyboard shortcuts ────────────────────────────────────────────────────────
+// Escape : clear the details pane / deselect span
+// /      : focus span filter input
+document.addEventListener('keydown', e => {
+  const tag = (e.target || {}).tagName;
+  const inInput = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+
+  if (e.key === 'Escape' && !e.metaKey && !e.ctrlKey) {
+    const body = document.getElementById('details-pane-body');
+    if (body) {
+      body.innerHTML = '<span class="details-empty">Click a span row to inspect its attributes.</span>';
+    }
+    // Deselect any selected span row
+    document.querySelectorAll('.span-row.selected').forEach(r => r.classList.remove('selected'));
+    if (inInput) e.target.blur();
+    e.preventDefault();
+  }
+
+  if (e.key === '/' && !inInput && !e.metaKey && !e.ctrlKey) {
+    const f = document.getElementById('span-filter');
+    if (f) { f.focus(); f.select(); e.preventDefault(); }
+  }
+});
+
 // ── Boot ──────────────────────────────────────────────────────────────────────
 connectMod3();
 connectKernel();
