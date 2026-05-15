@@ -86,8 +86,9 @@ class TestSpeakEndpoint:
         original = server._start_speech
         call_count = [0]
 
-        def fake_start_speech(text, voice, stream=True, speed=1.0, emotion=0.5,
-                               session_id=None, ref_audio=None, **kwargs):
+        def fake_start_speech(
+            text, voice, stream=True, speed=1.0, emotion=0.5, session_id=None, ref_audio=None, **kwargs
+        ):
             n = call_count[0]
             call_count[0] += 1
             job_id = f"job-test-{n:04d}"
@@ -113,8 +114,9 @@ class TestSpeakEndpoint:
         original = server._start_speech
         call_count = [0]
 
-        def fake_start_speech(text, voice, stream=True, speed=1.0, emotion=0.5,
-                               session_id=None, ref_audio=None, **kwargs):
+        def fake_start_speech(
+            text, voice, stream=True, speed=1.0, emotion=0.5, session_id=None, ref_audio=None, **kwargs
+        ):
             n = call_count[0]
             call_count[0] += 1
             job_id = f"job-test-{n:04d}"
@@ -203,8 +205,7 @@ class TestSpeakEndpoint:
         original = server._start_speech
         received = {}
 
-        def fake_start(text, voice, stream=True, speed=1.0, emotion=0.5,
-                        session_id=None, ref_audio=None, **kwargs):
+        def fake_start(text, voice, stream=True, speed=1.0, emotion=0.5, session_id=None, ref_audio=None, **kwargs):
             received["session_id"] = session_id
             return "job-sess-test", 0
 
@@ -224,8 +225,7 @@ class TestSpeakEndpoint:
         original = server._start_speech
         received = {}
 
-        def fake_start(text, voice, stream=True, speed=1.0, emotion=0.5,
-                        session_id=None, ref_audio=None, **kwargs):
+        def fake_start(text, voice, stream=True, speed=1.0, emotion=0.5, session_id=None, ref_audio=None, **kwargs):
             received["session_id"] = session_id
             return "job-no-sess", 0
 
