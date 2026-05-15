@@ -70,6 +70,36 @@ def post_profile(base_url: str, name: str, path: str, engine: str) -> str:
         return f"url error: {exc.reason}"
 
 
+def patch_metadata(base_url: str, name: str, metadata: dict) -> str:
+    """PATCH curation metadata fields onto an existing profile.
+
+    Silently skips keys that are not curation fields; the server validates.
+    Returns "ok" on success, a short error string otherwise.
+    """
+    url = f"{base_url}/v1/voices/profiles/{name}"
+    payload = json.dumps(metadata).encode()
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="PATCH",
+    )
+    try:
+        with urllib.request.urlopen(req) as resp:
+            if resp.status == 200:
+                return "ok"
+            return f"unexpected status {resp.status}"
+    except urllib.error.HTTPError as exc:
+        body = ""
+        try:
+            body = exc.read().decode(errors="replace")[:200]
+        except Exception:
+            pass
+        return f"http {exc.code}: {body}"
+    except urllib.error.URLError as exc:
+        return f"url error: {exc.reason}"
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Seed the mod3 voice profile registry from a JSON config.",
@@ -109,6 +139,9 @@ def main():
             print(f"{marker}{s['name']:30s}  {s['path']}")
         return
 
+    # Curation metadata fields that may be present in seed entries.
+    _CURATION_FIELDS = {"favorite", "notes", "tags", "rating"}
+
     print(f"Seeding {len(seeds)} profile(s) → {args.mod3}  [engine: {args.engine}]")
     print()
     for s in seeds:
@@ -123,9 +156,21 @@ def main():
         if result == "ok":
             print(f"  + {name}: registered")
         elif result == "exists":
-            print(f"  - {name}: already registered")
+            print(f"  - {name}: already registered (skipping re-registration)")
         else:
             print(f"  ! {name}: {result}")
+            continue
+
+        # Merge any curation metadata present in the seed entry onto the profile.
+        # This is idempotent: running the seed script again will apply the same
+        # values without overwriting unrelated fields the operator may have set.
+        curation = {k: s[k] for k in _CURATION_FIELDS if k in s}
+        if curation:
+            meta_result = patch_metadata(args.mod3, name, curation)
+            if meta_result == "ok":
+                print(f"    metadata merged: {list(curation)}")
+            else:
+                print(f"    metadata merge failed: {meta_result}")
 
 
 if __name__ == "__main__":
