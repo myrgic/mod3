@@ -465,6 +465,13 @@ def synthesize(req: SynthesizeRequest):
     if session_payload is not None:
         headers["X-Mod3-Session-Id"] = session_payload["session_id"]
 
+    # Update last_used_at for registered voice profiles (fire-and-forget; never
+    # blocks or fails the response).
+    try:
+        _registry.update_last_used_at(req.voice)
+    except Exception:  # noqa: BLE001
+        pass
+
     return Response(content=audio_bytes, media_type=media_type, headers=headers)
 
 
@@ -566,6 +573,12 @@ def audio_speech(req: SpeechRequest):
     }
     if session_id:
         headers["X-Mod3-Session-Id"] = session_id
+
+    # Update last_used_at for registered voice profiles.
+    try:
+        _registry.update_last_used_at(voice)
+    except Exception:  # noqa: BLE001
+        pass
 
     return Response(content=audio_bytes, media_type="audio/wav", headers=headers)
 
@@ -800,9 +813,125 @@ def register_profile(req: RegisterProfileRequest):
 
 
 @app.get("/v1/voices/profiles")
-def list_profiles():
-    """List all registered voice profiles."""
-    return {"profiles": [p.to_json() for p in _registry.list()]}
+def list_profiles(
+    request: Request,
+    tag: list[str] | None = None,
+    favorite: bool | None = None,
+    engine: str | None = None,
+    sort: str | None = None,
+):
+    """List registered voice profiles with optional filtering and sorting.
+
+    Query parameters:
+      ?tag=<tag>        Filter to profiles having this tag (repeatable; OR semantics).
+      ?favorite=true    Filter to favorited profiles only.
+      ?engine=<engine>  Filter to profiles registered with this engine.
+      ?sort=name        Sort by name ascending (default).
+      ?sort=last_used   Sort by last_used_at descending (nulls last).
+      ?sort=rating      Sort by rating descending (nulls last).
+
+    Multiple filter types compose with AND; within multi-value ?tag= the
+    semantics are OR (profile matches if it has *any* of the listed tags).
+    """
+    # FastAPI doesn't automatically collect repeated query params for
+    # list[str] | None in older versions — read directly from the request.
+    tag_values = request.query_params.getlist("tag") if tag is None else tag
+
+    profiles = _registry.list()
+
+    # --- filter ---
+    if tag_values:
+        tag_set = set(tag_values)
+        profiles = [p for p in profiles if tag_set.intersection(p.tags)]
+
+    if favorite is not None:
+        profiles = [p for p in profiles if p.favorite == favorite]
+
+    if engine is not None:
+        profiles = [p for p in profiles if p.engine == engine]
+
+    # --- sort ---
+    if sort == "last_used":
+        # Most-recently-used first; profiles without last_used_at sort to the end.
+        # key tuple: (has_value, timestamp_str) — both reversed so highest wins first.
+        # has_value=1 for set profiles, 0 for null; ISO timestamps sort
+        # lexicographically so most-recent string is largest.
+        profiles = sorted(
+            profiles,
+            key=lambda p: (1, p.last_used_at) if p.last_used_at else (0, ""),
+            reverse=True,
+        )
+    elif sort == "rating":
+        profiles = sorted(
+            profiles,
+            key=lambda p: (0 if p.rating is not None else 1, -(p.rating or 0)),
+        )
+    else:
+        # default: name ascending (registry.list() already sorts this way, but
+        # re-sort after filtering to preserve order)
+        profiles = sorted(profiles, key=lambda p: p.name)
+
+    return {"profiles": [p.to_json() for p in profiles]}
+
+
+@app.get("/v1/voices/profiles/{name}")
+def get_profile(name: str):
+    """Return a single voice profile by name. 404 if not found."""
+    from fastapi import HTTPException
+
+    profile = _registry.get(name)
+    if profile is None:
+        raise HTTPException(status_code=404, detail=f"profile {name!r} not found")
+    return profile.to_json()
+
+
+@app.patch("/v1/voices/profiles/{name}")
+async def patch_profile(name: str, request: Request):
+    """Update curation metadata fields on an existing profile.
+
+    Accepts a JSON body with any subset of:
+      favorite: bool
+      notes: str
+      tags: list[str]
+      last_used_at: str | null  (ISO 8601 timestamp)
+      rating: int | null        (1-5 when set)
+
+    Returns the updated profile (200), 404 if not found, 400 on invalid values.
+    """
+    from fastapi import HTTPException
+
+    body_bytes = await request.body()
+    try:
+        updates = json.loads(body_bytes)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail=f"invalid JSON: {exc}") from exc
+
+    if not isinstance(updates, dict):
+        raise HTTPException(status_code=400, detail="body must be a JSON object")
+
+    # Validate field types before touching disk.
+    allowed = {"favorite", "notes", "tags", "last_used_at", "rating"}
+    unknown = set(updates) - allowed
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"unknown fields: {sorted(unknown)}")
+
+    if "favorite" in updates and not isinstance(updates["favorite"], bool):
+        raise HTTPException(status_code=400, detail="'favorite' must be a boolean")
+    if "notes" in updates and not isinstance(updates["notes"], str):
+        raise HTTPException(status_code=400, detail="'notes' must be a string")
+    if "tags" in updates:
+        if not isinstance(updates["tags"], list) or not all(isinstance(t, str) for t in updates["tags"]):
+            raise HTTPException(status_code=400, detail="'tags' must be a list of strings")
+
+    try:
+        profile = _registry.patch_metadata(name, updates)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if profile is None:
+        raise HTTPException(status_code=404, detail=f"profile {name!r} not found")
+
+    return profile.to_json()
 
 
 @app.delete("/v1/voices/profiles/{name}")
