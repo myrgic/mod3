@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -105,23 +106,232 @@ def shutdown_stt_executor(wait: bool = True) -> None:
 #
 # This function detects the pattern and trims to the first occurrence.
 # It runs BEFORE is_hallucination() so the BoH check sees the cleaned text.
+#
+# Three strategies applied in order (first match wins):
+#   C — Sentence-level dedup: split on .!? and remove consecutive near-dup
+#       sentences.  Catches aligned repetitions most reliably.
+#   A — N-way chunk dedup: split text into N equal parts (N=2,3,4) and
+#       return the first part when all N are near-identical.
+#   B — Longest-repeating-suffix: Z-function O(n) scan for the longest
+#       suffix s such that text ends with s repeated ≥2 times; strips the
+#       trailing copies while preserving any non-repeating tail.
+#
+# A diagnostic INFO log is emitted when NO strategy fires, so real-world
+# near-miss cases can be studied from the service log.
 # ---------------------------------------------------------------------------
 
-_DEDUP_SIMILARITY_THRESHOLD = 0.95  # fraction of chars that must match
+_DEDUP_SIMILARITY_THRESHOLD = 0.95   # chunk similarity threshold (Strategy A)
+_DEDUP_SENTENCE_THRESHOLD = 0.85     # sentence-level threshold (Strategy C)
+# Minimum unit size guards.  Low values let us catch single-token repetitions
+# ("okay okay", "OK OK OK OK") while exact-equality in _near_equal ensures we
+# don't false-positive on legitimate short phrases.
+_DEDUP_MIN_UNIT_CHARS = 4            # minimum repeating unit character length
+_DEDUP_MIN_UNIT_WORDS = 1            # minimum repeating unit word count
+# Near-match floor: segments shorter than this use exact equality only (no
+# fuzzy matching), preventing false positives on short but valid sentences.
+_DEDUP_NEAR_MATCH_FLOOR = 10        # chars below which only exact match applies
 
+
+def _char_similarity(a: str, b: str) -> float:
+    """Character-level similarity between two strings (prefix-aligned)."""
+    if not a or not b:
+        return 0.0
+    shorter = min(len(a), len(b))
+    matches = sum(x == y for x, y in zip(a, b))
+    return matches / shorter
+
+
+def _word_count(s: str) -> int:
+    return len(s.split())
+
+
+def _near_equal(a: str, b: str, threshold: float) -> bool:
+    """True when the two strings are near-equal at the given char threshold.
+
+    Length-aware floor: if either string is shorter than _DEDUP_NEAR_MATCH_FLOOR
+    we require exact equality to avoid false positives on very short segments.
+    Exact equality always passes regardless of length.
+    """
+    a, b = a.strip(), b.strip()
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    # Short segments: only exact match counts (already handled above if equal).
+    if min(len(a), len(b)) < _DEDUP_NEAR_MATCH_FLOOR:
+        return False
+    return _char_similarity(a, b) >= threshold
+
+
+# ---------------------------------------------------------------------------
+# Strategy C — sentence-level dedup
+# ---------------------------------------------------------------------------
+
+_SENTENCE_SPLIT_RE = re.compile(r'(?<=[.!?])\s+')
+
+
+def _strategy_c(text: str) -> str | None:
+    """Remove consecutive near-duplicate sentences.
+
+    Splits on sentence boundaries, then walks the list removing any sentence
+    that is near-identical to its predecessor.  Returns the cleaned text if
+    at least one duplicate was removed, else None.
+
+    Also handles the no-punctuation case: if there is no .!? in the text,
+    this strategy yields to A/B.
+    """
+    sentences = _SENTENCE_SPLIT_RE.split(text.strip())
+    if len(sentences) < 2:
+        return None
+
+    kept: list[str] = [sentences[0]]
+    removed = 0
+    for sent in sentences[1:]:
+        if _near_equal(sent, kept[-1], _DEDUP_SENTENCE_THRESHOLD):
+            removed += 1
+        else:
+            kept.append(sent)
+
+    if removed == 0:
+        return None
+
+    result = " ".join(kept)
+    logger.info(
+        "STT dedup [C/sentence]: removed %d duplicate sentence(s), result: %r",
+        removed,
+        result[:80],
+    )
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Strategy A — N-way equal-chunk dedup
+# ---------------------------------------------------------------------------
+
+def _strategy_a(text: str) -> str | None:
+    """Split text into N equal chunks; if all N are near-identical, keep first.
+
+    Tries N=4,3,2 in descending order so higher-repetition patterns (4-way,
+    3-way) are collapsed before falling back to 2-way.  Uses the stricter
+    _DEDUP_SIMILARITY_THRESHOLD (0.95) since we're comparing char-aligned
+    chunks.
+    """
+    stripped = text.strip()
+    n_total = len(stripped)
+
+    for n in (4, 3, 2):
+        if n_total < n * _DEDUP_MIN_UNIT_CHARS:
+            continue
+        chunk_size = n_total // n
+        chunks = [stripped[i * chunk_size:(i + 1) * chunk_size].strip() for i in range(n)]
+        # Include any remainder in the last chunk.
+        if n_total % n:
+            chunks[-1] = stripped[(n - 1) * chunk_size:].strip()
+
+        if all(
+            _near_equal(chunks[0], chunks[i], _DEDUP_SIMILARITY_THRESHOLD)
+            for i in range(1, n)
+        ) and _word_count(chunks[0]) >= _DEDUP_MIN_UNIT_WORDS:
+            logger.info(
+                "STT dedup [A/%d-way]: kept first of %d chunks, result: %r",
+                n,
+                n,
+                chunks[0][:80],
+            )
+            return chunks[0]
+
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Strategy B — longest-repeating-suffix via Z-function (O(n))
+# ---------------------------------------------------------------------------
+
+def _z_function(s: str) -> list[int]:
+    """Compute the Z-array for string s.
+
+    z[i] = length of the longest substring starting at s[i] that is also a
+    prefix of s.  z[0] is conventionally 0 (or len(s) depending on
+    convention; we set it to 0 here since it is unused in the suffix search).
+    """
+    n = len(s)
+    z = [0] * n
+    l, r = 0, 0
+    for i in range(1, n):
+        if i < r:
+            z[i] = min(r - i, z[i - l])
+        while i + z[i] < n and s[z[i]] == s[i + z[i]]:
+            z[i] += 1
+        if i + z[i] > r:
+            l, r = i, i + z[i]
+    return z
+
+
+def _strategy_b(text: str) -> str | None:
+    """Detect and strip a repeated trailing suffix using Z-function.
+
+    Finds the shortest unit U (≥ _DEDUP_MIN_UNIT_CHARS) such that
+    z[len(U)] >= n - len(U), meaning the entire text beyond U is a prefix
+    match of U repeated.  This is true iff text = U * k (or U * k with a
+    truncated final copy due to stripping a trailing space).
+
+    The >= condition (rather than ==) gracefully handles cases where the
+    last repetition is one character shorter than the unit due to .strip()
+    removing a trailing space (e.g. unit="go home now " stripped to
+    "go home now go home now go home now go home now" len=47).
+
+    Example:
+      "Hello world. Hello world." → unit="Hello world." reps=2 → "Hello world."
+      "Hello world. Hello world. Yes." → z[13] < 30-13; B does NOT fire
+        (correct — trailing content preserved, Strategy C handles this case).
+      "go home now go home now go home now go home now" → z[12]=35=47-12 → fires.
+    """
+    stripped = text.strip()
+    n = len(stripped)
+
+    z = _z_function(stripped)
+
+    best_unit: str | None = None
+    best_reps = 1
+
+    # Start from 2 (single-char units are noise) so single short tokens like
+    # "OK OK OK OK" (unit = "OK ", 3 chars) are detected.
+    _b_min_chars = max(2, _DEDUP_MIN_UNIT_CHARS // 2)
+    for unit_len in range(_b_min_chars, n // 2 + 1):
+        # z[unit_len] >= n - unit_len means stripped[unit_len:] is fully
+        # covered by the prefix stripped[:unit_len], i.e. entire text is
+        # a repetition of that unit.
+        if z[unit_len] >= n - unit_len:
+            unit = stripped[:unit_len]
+            if _word_count(unit) >= _DEDUP_MIN_UNIT_WORDS:
+                reps = (n + unit_len - 1) // unit_len  # ceiling estimate
+                best_unit = unit
+                best_reps = reps
+                break  # shortest unit_len comes first; take it
+
+    if best_unit is not None:
+        best_unit = best_unit.strip()
+        logger.info(
+            "STT dedup [B/suffix]: unit=%r reps~=%d, result: %r",
+            best_unit[:40],
+            best_reps,
+            best_unit[:80],
+        )
+        return best_unit
+
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Public entry point
+# ---------------------------------------------------------------------------
 
 def _dedup_repeated_transcript(text: str) -> str:
     """Return text with trailing repeated content removed.
 
-    Strategy:
-      1. Exact half-split: if the first half and second half of the string
-         are identical (after stripping whitespace), return the first half.
-      2. Suffix-overlap: find the longest suffix of the first half that is
-         a prefix of the second half — if that overlap covers ≥95% of the
-         first half's length, the second half is a near-duplicate repetition.
-      3. If neither heuristic fires, return the original text unchanged.
-
-    Logs at INFO level when dedup fires so operators can observe frequency.
+    Applies three strategies in order (C → A → B); first match wins.
+    Logs at INFO level when dedup fires (with which strategy) and when it
+    does NOT fire (diagnostic — lets operators study real failure modes).
     """
     stripped = text.strip()
     if not stripped:
@@ -131,31 +341,26 @@ def _dedup_repeated_transcript(text: str) -> str:
     if n < 4:  # too short to be a meaningful repetition
         return text
 
-    mid = n // 2
-    first_half = stripped[:mid].strip()
-    second_half = stripped[mid:].strip()
+    # Strategy C — sentence-level dedup (sentence-aligned transcripts).
+    result = _strategy_c(stripped)
+    if result is not None:
+        return result
 
-    # Heuristic 1 — exact match after stripping.
-    if first_half == second_half and first_half:
-        logger.info("STT dedup: exact half-match, trimmed %d chars", len(second_half))
-        return first_half
+    # Strategy B — Z-function exact-repetition (O(n), word-boundary safe).
+    # Run before A because character-chunk splitting in A is unreliable at
+    # word boundaries; B handles exact k-way repetition precisely.
+    result = _strategy_b(stripped)
+    if result is not None:
+        return result
 
-    # Heuristic 2 — similarity via longest-common-prefix of suffix/prefix overlap.
-    # Compare character-level similarity between the two halves.
-    if first_half and second_half:
-        shorter_len = min(len(first_half), len(second_half))
-        if shorter_len > 0:
-            # Count matching chars from the start of each half (after strip).
-            matches = sum(a == b for a, b in zip(first_half, second_half))
-            similarity = matches / shorter_len
-            if similarity >= _DEDUP_SIMILARITY_THRESHOLD:
-                logger.info(
-                    "STT dedup: near-duplicate halves (similarity=%.2f), trimmed %d chars",
-                    similarity,
-                    len(second_half),
-                )
-                return first_half
+    # Strategy A — N-way near-duplicate chunk (catches fuzzy repetitions that
+    # B misses because the copies differ by a word or punctuation mark).
+    result = _strategy_a(stripped)
+    if result is not None:
+        return result
 
+    # No strategy fired — log for diagnostics.
+    logger.info("STT dedup: no match — transcript: %r", stripped[:200])
     return text
 
 
