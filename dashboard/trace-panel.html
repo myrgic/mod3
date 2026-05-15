@@ -363,23 +363,37 @@ function connectKernel() {
 }
 
 // ── TurnGroup management ──────────────────────────────────────────────────────
-// Clustering window for voice-path turns (no message_id): 30 seconds.
+// Clustering window for voice-path turns (no trace_id AND no message_id): 30 seconds.
+// This is now a last-resort fallback only — PR #60 ensures all 8 phase events
+// carry trace_id, so timestamp clustering is no longer the primary grouping key.
 const VOICE_CLUSTER_WINDOW_MS = 30_000;
 
-function getOrCreateTurn(messageId, sessionId, ts) {
-  // 1. Stable message_id match — always wins.
+// Map from trace_id (32-hex) → turn group index.
+// Primary grouping key since PR #60 guarantees all phase events carry trace_id.
+const traceIdToTurn = {};
+
+function getOrCreateTurn(messageId, sessionId, ts, traceId) {
+  // 1. trace_id match — primary key when available (PR #60 guarantees this for
+  //    all 8 phase events). Prevents slow-turn STT for turn N+1 from clustering
+  //    into turn N's card even when the 30s window would otherwise match.
+  if (traceId && traceIdToTurn[traceId] != null) {
+    return turns[traceIdToTurn[traceId]];
+  }
+
+  // 2. Stable message_id match — wins for text-path turns that share a trace_id
+  //    but where we may not have seen the trace_id yet on a first event.
   if (messageId && msgIdToTurn[messageId] != null) {
     return turns[msgIdToTurn[messageId]];
   }
 
-  // 2. Voice path (empty messageId): cluster by session + timestamp proximity.
-  //    This prevents one utterance from spawning 8 separate turns when
-  //    historical events are loaded and all have messageId = "".
-  if (!messageId && ts) {
+  // 3. Fallback: timestamp clustering for events that genuinely lack both
+  //    trace_id and message_id (should be rare/never after PR #60).
+  if (!traceId && !messageId && ts) {
+    console.warn('[trace-panel] event with no trace_id and no message_id — falling back to timestamp clustering', { sessionId, ts });
     const evTime = new Date(ts).getTime();
     for (let i = turns.length - 1; i >= 0; i--) {
       const t = turns[i];
-      if (t.messageId) continue; // skip message-id turns
+      if (t.messageId || t.traceId) continue; // skip turns already anchored by id
       if (t.sessionId !== (sessionId || '')) continue;
       const tTime = new Date(t.ts).getTime();
       if (Math.abs(evTime - tTime) <= VOICE_CLUSTER_WINDOW_MS) {
@@ -388,10 +402,11 @@ function getOrCreateTurn(messageId, sessionId, ts) {
     }
   }
 
-  // 3. New turn.
+  // 4. New turn.
   const t = {
     idx:       ++turnIndex,
     messageId: messageId || null,
+    traceId:   traceId   || null,
     sessionId: sessionId || '',
     ts:        ts || new Date().toISOString(),
     phases:    [],      // {name, duration_ms, ts, ok, tokens, trace_id}
@@ -402,6 +417,7 @@ function getOrCreateTurn(messageId, sessionId, ts) {
   };
   turns.push(t);
   if (messageId) msgIdToTurn[messageId] = turns.length - 1;
+  if (traceId)   traceIdToTurn[traceId]  = turns.length - 1;
 
   // Track newest key for auto-expand logic.
   newestTurnKey = turnKey(t);
@@ -414,11 +430,12 @@ function processMod3Event(ev) {
   const sid = ev.session_id || '';
   const msgId = ev.message_id || '';
   const ts = ev.ts || '';
+  const evTraceId = ev.trace_id || '';
 
   // Phase events
   if (et.startsWith('chat.phase.')) {
     const phaseName = ev.phase_name || et.replace('chat.phase.', '');
-    const turn = getOrCreateTurn(msgId, sid, ts);
+    const turn = getOrCreateTurn(msgId, sid, ts, evTraceId);
     const entry = {
       name:        phaseName,
       duration_ms: ev.duration_ms,
@@ -446,7 +463,7 @@ function processMod3Event(ev) {
 
   // Bargein event — creates speculative block
   if (et === 'bargein.event') {
-    const turn = getOrCreateTurn(msgId, sid, ts);
+    const turn = getOrCreateTurn(msgId, sid, ts, evTraceId);
     turn.speculative = {
       text_actually_played: ev.text_actually_played || '',
       text_speculative:     ev.text_speculative || '',
@@ -461,34 +478,47 @@ function processMod3Event(ev) {
   mod3Events++;
 }
 
-function processKernelEvent(block) {
-  // block is a BusBlock: {type, payload, ...}
-  const payload = block.payload || block;
-  const blockType = payload.type || block.type || '';
+function processKernelEvent(envelope) {
+  // The bus SSE stream sends busSSEEnvelope: {id, type, timestamp, data: BusBlock}
+  // where BusBlock is {seq, type, payload, hash, ts, ...}.
+  // The actual event type and payload live inside envelope.data, not at the top level.
+  const busBlock  = envelope.data || envelope;          // tolerate both shapes
+  const blockType = busBlock.type || envelope.type || '';
+  const payload   = busBlock.payload || {};              // the ChatSubSpan fields
 
   if (blockType === 'kernel.handler.span.v1') {
-    // Handler-level span — attach to turn by session if we can match
+    // Handler-level span — no chat correlation needed; just count it.
     kernelEvents++;
-    // We can't correlate to a message_id here; just update event count
     scheduleRender();
     return;
   }
 
   // Chat sub-spans emitted by cogos handle_chat
-  // type: "chat.prompt_eval" | "chat.thinking_generation" | "chat.answer_generation" | "chat.tool_call_resolution"
-  const spanName = payload.span_name || blockType;
-  if (spanName && spanName.startsWith('chat.')) {
-    const sid = payload.session_id || '';
-    const traceId = payload.trace_id || '';
-    // Try to find a matching turn by trace_id or recent session
+  // event type: "kernel.chat.subspan.v1"
+  // payload.span_name: "chat.prompt_eval" | "chat.thinking_generation" |
+  //                    "chat.answer_generation" | "chat.tool_call_resolution"
+  if (blockType === 'kernel.chat.subspan.v1') {
+    const spanName = payload.span_name || '';
+    if (!spanName) { kernelEvents++; return; }
+
+    const sid     = payload.session_id || '';
+    const traceId = payload.trace_id   || '';
+
+    // Correlate to turn: prefer trace_id (primary key from PR #60 + cogos #262).
     let turn = null;
     if (traceId) {
-      // Look for a turn whose trace_id matches
-      for (let i = turns.length - 1; i >= 0; i--) {
-        for (const p of turns[i].phases) {
-          if (p.trace_id === traceId) { turn = turns[i]; break; }
+      if (traceIdToTurn[traceId] != null) {
+        turn = turns[traceIdToTurn[traceId]];
+      }
+      if (!turn) {
+        // Scan phase-level trace_id fields (in case index isn't populated yet)
+        for (let i = turns.length - 1; i >= 0; i--) {
+          if (turns[i].traceId === traceId) { turn = turns[i]; break; }
+          for (const p of turns[i].phases) {
+            if (p.trace_id === traceId) { turn = turns[i]; break; }
+          }
+          if (turn) break;
         }
-        if (turn) break;
       }
     }
     // Fallback: most recent turn for this session
@@ -500,15 +530,18 @@ function processKernelEvent(block) {
     if (!turn && turns.length > 0) {
       turn = turns[turns.length - 1];
     }
+
     if (turn) {
       turn.kernelSpans.push({
-        name:         spanName,
-        duration_ms:  payload.duration_ms,
-        tokens_think: payload.tokens_think || null,
+        name:          spanName,
+        duration_ms:   payload.duration_ms,
+        tokens_think:  payload.tokens_think  || null,
         tokens_answer: payload.tokens_answer || null,
-        tokens_total: payload.tokens_total || null,
-        tool_count:   payload.tool_call_count || null,
+        tokens_total:  payload.tokens_total  || null,
+        tool_count:    payload.tool_calls    || null, // kernel emits "tool_calls" not "tool_call_count"
       });
+    } else {
+      console.warn('[trace-panel] kernel sub-span: no matching turn', { spanName, traceId, sid });
     }
     kernelEvents++;
     scheduleRender();
@@ -522,14 +555,16 @@ function processKernelEvent(block) {
 // If ts is missing for some phases, fall back to sequential layout.
 
 function computeTimelineLayout(t) {
-  const phases = t.phases.filter(p => p.duration_ms > 0);
+  // Exclude turn_total from layout calculations — it would inflate the span to
+  // cover the full timeline, crowding out individual phase positioning.
+  const phases = t.phases.filter(p => p.duration_ms > 0 && p.name !== 'turn_total');
   if (phases.length === 0) return { useWallClock: false, turnStartMs: 0, spanMs: 1 };
 
   // Check if all phases have ts fields
   const allHaveTs = phases.every(p => p.ts);
 
   if (!allHaveTs) {
-    return { useWallClock: false, turnStartMs: 0, spanMs: t.totalMs || phases.reduce((s, p) => s + (p.duration_ms || 0), 0) || 1 };
+    return { useWallClock: false, turnStartMs: 0, spanMs: phases.reduce((s, p) => s + (p.duration_ms || 0), 0) || 1 };
   }
 
   // Wall-clock layout: derive start time from (end_ts - duration_ms)
@@ -540,16 +575,6 @@ function computeTimelineLayout(t) {
     const startMs = endMs - (p.duration_ms || 0);
     if (startMs < earliest) earliest = startMs;
     if (endMs   > latest)   latest   = endMs;
-  }
-
-  // Also account for turn_total if present
-  if (t.totalMs) {
-    // The turn_total end-time should be close to latest; use it to anchor span
-    const totalPhase = t.phases.find(p => p.name === 'turn_total');
-    if (totalPhase && totalPhase.ts) {
-      const totalEnd = new Date(totalPhase.ts).getTime();
-      if (totalEnd > latest) latest = totalEnd;
-    }
   }
 
   const spanMs = Math.max(latest - earliest, 1);
@@ -681,11 +706,15 @@ function buildTurnCard(t, initiallyExpanded) {
   timelineWrap.appendChild(timeline);
   card.appendChild(timelineWrap);
 
-  // Render main phase bars (wall-clock or sequential fallback)
+  // Render main phase bars (wall-clock or sequential fallback).
+  // turn_total is excluded: it spans the full width by definition and would
+  // obscure all other phase bars. Its duration is shown in the card header
+  // (turn-total-ms) and in the expanded detail phases list.
   let cursor = 0; // sequential cursor (fallback)
   const spanMs = layout.spanMs;
 
   for (const p of t.phases) {
+    if (p.name === 'turn_total') { continue; } // not a real phase — shown in header
     const dur = p.duration_ms || 0;
     if (dur <= 0) { cursor += dur; continue; }
 
@@ -946,6 +975,7 @@ document.getElementById('pause-btn').addEventListener('click', (e) => {
 document.getElementById('clear-btn').addEventListener('click', () => {
   turns.length = 0;
   Object.keys(msgIdToTurn).forEach(k => delete msgIdToTurn[k]);
+  Object.keys(traceIdToTurn).forEach(k => delete traceIdToTurn[k]);
   expandedByOp.clear();
   newestTurnKey = null;
   turnIndex = 0;
