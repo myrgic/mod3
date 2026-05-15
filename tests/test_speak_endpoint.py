@@ -17,9 +17,11 @@ from __future__ import annotations
 import os
 import sys
 import threading
-import time
+
 import pytest
 
+# Ensure the project root is on the path so imports resolve when running
+# standalone (python3 -m pytest tests/test_speak_endpoint.py).
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
