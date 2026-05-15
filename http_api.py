@@ -1706,17 +1706,19 @@ async def get_providers_available():
 
     # Fallback: static list derived from known provider names so the UI is
     # never empty when the kernel is unreachable.
-    return JSONResponse(content={
-        "providers": [
-            {"name": "lmstudio-eclipse", "type": "lmstudio-eclipse", "available": True},
-            {"name": "ollama",            "type": "ollama",           "available": True},
-            {"name": "lmstudio-darkstar", "type": "lmstudio-darkstar","available": False},
-            {"name": "claude-code",       "type": "claude-code",      "available": True},
-            {"name": "codex",             "type": "codex",            "available": False},
-            {"name": "mlx-lm",            "type": "mlx-lm",           "available": False},
-        ],
-        "source": "fallback",
-    })
+    return JSONResponse(
+        content={
+            "providers": [
+                {"name": "lmstudio-eclipse", "type": "lmstudio-eclipse", "available": True},
+                {"name": "ollama", "type": "ollama", "available": True},
+                {"name": "lmstudio-darkstar", "type": "lmstudio-darkstar", "available": False},
+                {"name": "claude-code", "type": "claude-code", "available": True},
+                {"name": "codex", "type": "codex", "available": False},
+                {"name": "mlx-lm", "type": "mlx-lm", "available": False},
+            ],
+            "source": "fallback",
+        }
+    )
 
 
 @app.post("/v1/claude-code/spawn")
