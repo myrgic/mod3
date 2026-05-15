@@ -1591,8 +1591,9 @@ _dashboard_dir = Path(__file__).parent / "dashboard"
 
 
 @app.get("/dashboard")
+@app.get("/dashboard/")
 async def dashboard_page():
-    """Serve the dashboard UI."""
+    """Serve the dashboard UI (handles both /dashboard and /dashboard/)."""
     index = _dashboard_dir / "index.html"
     if index.exists():
         return FileResponse(str(index))
