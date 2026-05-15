@@ -61,6 +61,7 @@ from schemas.http import (
     RegisterProfileRequest,
     SessionRegisterRequest,
     ShutdownRequest,
+    SpeakRequest,
     SpeechRequest,
     SynthesizeRequest,
     VadFilterRequest,
@@ -848,6 +849,48 @@ def stop_speech(job_id: str = ""):
                 "message": f"Interrupted playback; cancelled {cancelled_count} queued items",
                 "interrupted": interrupt_info,
             }
+    except ImportError:
+        return JSONResponse(status_code=503, content={"error": "Speech queue not available in HTTP-only mode"})
+
+
+@app.post("/v1/speak")
+def speak_enqueue(req: SpeakRequest):
+    """Queue-aware speak endpoint. Wraps _start_speech; returns immediately.
+
+    Unlike /v1/synthesize (which blocks, returns WAV bytes, and requires the
+    caller to manage playback), this endpoint enqueues the request in mod3's
+    speech queue and returns a job token. The drain thread owns all audio
+    playback — callers never spawn afplay or aplay.
+
+    Returns:
+        {
+            "job_id": str,          # correlation handle; poll /v1/speech_status
+            "queue_position": int,  # 0 = playing immediately, N = queued
+            "status": str           # "speaking" | "queued"
+        }
+
+    Poll GET /v1/jobs/{job_id} for completion status.
+    Stop via POST /v1/stop?job_id={job_id}.
+    """
+    if not req.text.strip():
+        return JSONResponse(status_code=400, content={"error": "text required"})
+    try:
+        from server import _start_speech
+
+        job_id, position = _start_speech(
+            req.text,
+            req.voice,
+            stream=req.stream,
+            speed=req.speed,
+            emotion=req.emotion,
+            session_id=req.session_id or None,
+            ref_audio=req.ref_audio or None,
+        )
+        return {
+            "job_id": job_id,
+            "queue_position": position,
+            "status": "queued" if position > 0 else "speaking",
+        }
     except ImportError:
         return JSONResponse(status_code=503, content={"error": "Speech queue not available in HTTP-only mode"})
 
