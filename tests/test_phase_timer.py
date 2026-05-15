@@ -26,11 +26,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from chat_flow_log import (
     CHAT_PHASE_PREFIX,
     ChatFlowLog,
-    _PhaseTimer,
     get_chat_flow_log,
     phase_timer,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -95,22 +93,8 @@ class TestEmitPhase:
 
 class TestPhaseTimerSync:
     def test_emits_one_event_on_exit(self):
-        log = _fresh_log()
-        _original_emit = log.emit_phase
-        emitted: list[dict] = []
-
-        def _capture(*args, **kwargs):
-            ev = _original_emit(*args, **kwargs)
-            emitted.append(ev)
-            return ev
-
-        log.emit_phase = _capture  # type: ignore[method-assign]
-
-        timer = phase_timer("provider_call", "ch-1", "msg-a")
-        # Monkeypatch: the timer calls get_chat_flow_log() internally, so we
-        # test via the singleton to verify end-to-end behaviour.
+        # phase_timer calls get_chat_flow_log() internally; test via the singleton.
         singleton = get_chat_flow_log()
-        initial_count = len(singleton.query(event_type="chat.phase.*", limit=1000))
 
         with phase_timer("provider_call", "ch-singleton", "msg-sync"):
             time.sleep(0.001)  # ensure measurable wall time
