@@ -1251,6 +1251,44 @@ function saveTransportPref(val) {
   });
 })();
 
+// --- Providers loader — populates any #inference-backend selector dynamically ---
+// Called on page load; also available as window.__loadProviders() for re-use.
+(function initProvidersLoader() {
+  const PROVIDERS_URL = '/v1/providers/available';
+  const BACKEND_KEY   = 'mod3.inferenceBackend';
+
+  async function loadProviders() {
+    const sel = document.getElementById('inference-backend');
+    if (!sel) return; // selector not in DOM on this page
+    try {
+      const r = await fetch(PROVIDERS_URL, { signal: AbortSignal.timeout(3000) });
+      if (!r.ok) return;
+      const data = await r.json();
+      const providers = Array.isArray(data.providers) ? data.providers : [];
+      if (providers.length === 0) return;
+
+      const saved = localStorage.getItem(BACKEND_KEY);
+      sel.innerHTML = '';
+      providers.forEach(p => {
+        const opt = document.createElement('option');
+        opt.value = p.name;
+        opt.textContent = p.available
+          ? `${p.name}`
+          : `${p.name} (offline)`;
+        if (!p.available) opt.style.color = 'var(--muted)';
+        if (saved && p.name === saved) opt.selected = true;
+        else if (!saved && p.name === 'lmstudio-eclipse') opt.selected = true;
+        sel.appendChild(opt);
+      });
+    } catch {
+      // Keep the static fallback options already in the DOM.
+    }
+  }
+
+  window.__loadProviders = loadProviders;
+  loadProviders();
+})();
+
 // Reset button — clears all mod3.* localStorage keys
 document.getElementById('settings-reset-btn').addEventListener('click', () => {
   Object.values(SETTINGS_KEYS).forEach(k => { try { localStorage.removeItem(k); } catch {} });
