@@ -275,11 +275,7 @@ class AgentLoop:
                                         else "bm_lewis"
                                     ),
                                     "speed": tc.arguments.get("speed")
-                                    or (
-                                        self._channel_ref.config.get("speed", 1.25)
-                                        if self._channel_ref
-                                        else 1.25
-                                    ),
+                                    or (self._channel_ref.config.get("speed", 1.25) if self._channel_ref else 1.25),
                                     "session_id": _session_id,
                                     "message_id": _msg_id,
                                 },

@@ -1625,9 +1625,7 @@ def output(
 
     valid_modes = {"audio", "text", "both"}
     if mode not in valid_modes:
-        return json.dumps(
-            {"status": "error", "error": f"mode must be one of {sorted(valid_modes)}, got {mode!r}"}
-        )
+        return json.dumps({"status": "error", "error": f"mode must be one of {sorted(valid_modes)}, got {mode!r}"})
 
     results: dict = {"status": "ok", "mode": mode}
 
