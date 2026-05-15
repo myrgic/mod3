@@ -70,9 +70,13 @@ AGENT_TOOLS: list[dict] = [
             "name": "output",
             "description": (
                 "Unified output tool. Use for all agent responses. "
-                "mode='audio' for conversational voice replies (TTS), "
-                "mode='text' for content better read than heard (code, lists, links), "
-                "mode='both' for responses that deserve both audio and a visual record."
+                "mode='both' (default for conversational replies): speaks the text aloud via TTS "
+                "AND shows it as a chat bubble in the dashboard. Use this for everything the "
+                "operator should be able to read. "
+                "mode='audio': speaks aloud AND shows text bubble (identical to 'both' — "
+                "reserved for cases where the text would be redundant on screen, e.g. filler). "
+                "mode='text': shows in chat panel only, no audio. Use for code, lists, links, "
+                "structured data that is better read than heard."
             ),
             "parameters": {
                 "type": "object",
@@ -83,8 +87,8 @@ AGENT_TOOLS: list[dict] = [
                     },
                     "mode": {
                         "type": "string",
-                        "enum": ["audio", "text", "both"],
-                        "description": "Delivery mode. Default 'audio'.",
+                        "enum": ["both", "audio", "text"],
+                        "description": "Delivery mode. Default 'both' (voice + chat bubble).",
                     },
                 },
                 "required": ["text"],

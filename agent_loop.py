@@ -32,11 +32,14 @@ logger = logging.getLogger("mod3.agent_loop")
 # Base system prompt — kernel context is appended dynamically
 _BASE_SYSTEM_PROMPT = (
     "You are Cog, a voice assistant running on Mod³ (Apple Silicon, fully local). "
-    "You respond using tool calls. Use output(text=..., mode='audio') for conversational "
-    "voice responses — keep them concise, 1-3 sentences. Use output(text=..., mode='text') "
-    "only when the content is better read than heard (code, lists, links, structured data). "
-    "Use output(text=..., mode='both') when a response deserves both voice and a visual record. "
-    "No markdown in audio-mode output text. Speak naturally. "
+    "You respond using tool calls. "
+    "Default to output(text=..., mode='both') for conversational replies — this speaks the text "
+    "aloud AND shows it as a chat bubble in the dashboard so the operator can read along. "
+    "Use mode='audio' only when the text would be redundant on screen (e.g. purely filler like "
+    "'mm-hmm', 'got it', 'one moment'). "
+    "Use mode='text' only when the content is better read than heard (code, lists, links, "
+    "structured data) and you are not speaking it. "
+    "Keep audio responses concise, 1-3 sentences. No markdown in audio text. Speak naturally. "
     "If the user asks something you can't do, say so briefly. "
     "Legacy tools speak() and send_text() still work but are deprecated."
 )
@@ -272,8 +275,14 @@ class AgentLoop:
                 if text:
                     assistant_parts.append(text)
                     async with phase_timer("tool_execute", _session_id, _msg_id, trace_id=_provider_trace_id):
-                        # Text path: send to dashboard chat panel
-                        if mode in ("text", "both"):
+                        # Text path: send to dashboard chat panel.
+                        # mode="audio" also emits the text bubble (Option A: baseline parity).
+                        # This lets the operator read along while audio plays, and ensures
+                        # the speculative-output block is visible after a barge-in.
+                        # mode="audio" with purely conversational filler that the model judges
+                        # should not clutter the chat panel is the ONLY exception — model
+                        # should use mode="both" (the new default) for all other cases.
+                        if mode in ("text", "both", "audio"):
                             if self._channel_ref:
                                 await self._channel_ref.send_response_text(text)
                         # Audio path: route through bus → VoiceEncoder → TTS
