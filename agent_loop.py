@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 import httpx
 
 from bus import ModalityBus
+from chat_flow_log import phase_timer
 from draft_queue import DraftQueue
 from modality import CognitiveEvent, CognitiveIntent, ModalityType
 from pipeline_state import PipelineState
@@ -186,6 +187,13 @@ class AgentLoop:
         self.conversation.append({"role": "user", "content": event.content})
         self._trim_history()
 
+        # --- Phase: agent_dispatch ------------------------------------------
+        # Covers the time from event arrival (start of _process) to provider
+        # call dispatch: history trim, kernel context fetch, prompt assembly.
+        _session_id = self.channel_id
+        _msg_id = event.metadata.get("message_id", "")
+        _turn_t0 = time.perf_counter()
+
         t_start = time.perf_counter()
 
         # Assemble system prompt with kernel context (afferent path)
@@ -193,14 +201,30 @@ class AgentLoop:
         system_prompt = _BASE_SYSTEM_PROMPT + kernel_ctx
         system_prompt = self._inject_pending_bargein(system_prompt)
 
-        response = await self.provider.chat(
-            messages=self.conversation,
-            tools=AGENT_TOOLS,
-            system=system_prompt,
-        )
+        _agent_dispatch_ms = int((time.perf_counter() - t_start) * 1000)
+        try:
+            from chat_flow_log import get_chat_flow_log
 
-        t_llm = (time.perf_counter() - t_start) * 1000
+            get_chat_flow_log().emit_phase(
+                phase_name="agent_dispatch",
+                session_id=_session_id,
+                message_id=_msg_id,
+                duration_ms=_agent_dispatch_ms,
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
+        # --- Phase: provider_call -------------------------------------------
+        t_provider_start = time.perf_counter()
+        async with phase_timer("provider_call", _session_id, _msg_id):
+            response = await self.provider.chat(
+                messages=self.conversation,
+                tools=AGENT_TOOLS,
+                system=system_prompt,
+            )
+        t_llm = (time.perf_counter() - t_provider_start) * 1000
+
+        # --- Phase: tool_execute (per tool call) ----------------------------
         # Dispatch tool calls
         assistant_parts: list[str] = []
 
@@ -209,48 +233,57 @@ class AgentLoop:
                 text = tc.arguments.get("text", "")
                 if text:
                     assistant_parts.append(text)
-                    # Show text in chat panel
-                    if self._channel_ref:
-                        await self._channel_ref.send_response_text(text)
-                    # Route through bus → VoiceEncoder → TTS → channel.deliver
-                    intent = CognitiveIntent(
-                        modality=ModalityType.VOICE,
-                        content=text,
-                        target_channel=self.channel_id,
-                        metadata={
-                            "voice": self._channel_ref.config.get("voice", "bm_lewis")
-                            if self._channel_ref
-                            else "bm_lewis",
-                            "speed": self._channel_ref.config.get("speed", 1.25) if self._channel_ref else 1.25,
-                        },
-                    )
-                    # Fire-and-forget: bus.act(blocking=False) returns QueuedJob immediately,
-                    # OutputQueue drain thread handles TTS encoding + delivery.
-                    self.bus.act(intent, channel=self.channel_id)
+                    async with phase_timer("tool_execute", _session_id, _msg_id):
+                        # Show text in chat panel
+                        if self._channel_ref:
+                            await self._channel_ref.send_response_text(text)
+                        # Route through bus → VoiceEncoder → TTS → channel.deliver
+                        intent = CognitiveIntent(
+                            modality=ModalityType.VOICE,
+                            content=text,
+                            target_channel=self.channel_id,
+                            metadata={
+                                "voice": self._channel_ref.config.get("voice", "bm_lewis")
+                                if self._channel_ref
+                                else "bm_lewis",
+                                "speed": self._channel_ref.config.get("speed", 1.25) if self._channel_ref else 1.25,
+                                # Pass through phase-timing identifiers so VoiceEncoder
+                                # can attribute tts_synthesize events to this turn.
+                                "session_id": _session_id,
+                                "message_id": _msg_id,
+                            },
+                        )
+                        # Fire-and-forget: bus.act(blocking=False) returns QueuedJob immediately,
+                        # OutputQueue drain thread handles TTS encoding + delivery.
+                        self.bus.act(intent, channel=self.channel_id)
 
             elif tc.name == "send_text":
                 text = tc.arguments.get("text", "")
                 if text:
                     assistant_parts.append(text)
-                    if self._channel_ref:
-                        await self._channel_ref.send_response_text(text)
+                    async with phase_timer("tool_execute", _session_id, _msg_id):
+                        if self._channel_ref:
+                            await self._channel_ref.send_response_text(text)
 
         # Fallback: if provider returned text but no tool calls, auto-speak
         if not response.tool_calls and response.text:
             text = response.text
             assistant_parts.append(text)
-            if self._channel_ref:
-                await self._channel_ref.send_response_text(text)
-            intent = CognitiveIntent(
-                modality=ModalityType.VOICE,
-                content=text,
-                target_channel=self.channel_id,
-                metadata={
-                    "voice": self._channel_ref.config.get("voice", "bm_lewis") if self._channel_ref else "bm_lewis",
-                    "speed": self._channel_ref.config.get("speed", 1.25) if self._channel_ref else 1.25,
-                },
-            )
-            self.bus.act(intent, channel=self.channel_id)
+            async with phase_timer("tool_execute", _session_id, _msg_id):
+                if self._channel_ref:
+                    await self._channel_ref.send_response_text(text)
+                intent = CognitiveIntent(
+                    modality=ModalityType.VOICE,
+                    content=text,
+                    target_channel=self.channel_id,
+                    metadata={
+                        "voice": self._channel_ref.config.get("voice", "bm_lewis") if self._channel_ref else "bm_lewis",
+                        "speed": self._channel_ref.config.get("speed", 1.25) if self._channel_ref else 1.25,
+                        "session_id": _session_id,
+                        "message_id": _msg_id,
+                    },
+                )
+                self.bus.act(intent, channel=self.channel_id)
 
         # Update conversation history
         if assistant_parts:
@@ -264,6 +297,20 @@ class AgentLoop:
 
             # Log exchange to CogOS bus (observation channel — Claude can see this)
             _log_exchange_to_bus(event.content, assistant_text, self.provider.name)
+
+        # --- Phase: turn_total ----------------------------------------------
+        _turn_total_ms = int((time.perf_counter() - _turn_t0) * 1000)
+        try:
+            from chat_flow_log import get_chat_flow_log
+
+            get_chat_flow_log().emit_phase(
+                phase_name="turn_total",
+                session_id=_session_id,
+                message_id=_msg_id,
+                duration_ms=_turn_total_ms,
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
         # Signal completion
         if self._channel_ref:

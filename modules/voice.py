@@ -414,11 +414,18 @@ class VoiceEncoder(Encoder):
         voice = intent.metadata.get("voice", self.default_voice)
         speed = intent.metadata.get("speed", self.default_speed)
         emotion = intent.metadata.get("emotion", 0.5)
+        # Phase-timing identifiers — channel_id and message_id are passed
+        # through intent.metadata by the agent loop when available.
+        _session_id = intent.metadata.get("session_id", "")
+        _msg_id = intent.metadata.get("message_id", "")
 
         self._state.status = ModuleStatus.ENCODING
         self._state.current_text = intent.content[:100]
         self._state.last_activity = time.time()
 
+        _tts_synth_ok = True
+        _tts_synth_err: str | None = None
+        _synth_t0 = time.perf_counter()
         try:
             samples, sample_rate = synthesize(
                 intent.content,
@@ -426,30 +433,75 @@ class VoiceEncoder(Encoder):
                 speed=speed,
                 emotion=emotion,
             )
-
-            wav_bytes = _encode_wav(samples, sample_rate)
-            duration = len(samples) / sample_rate
-
-            self._state.status = ModuleStatus.IDLE
-            self._state.last_output_text = intent.content[:100]
-            self._state.progress = 1.0
-
-            return EncodedOutput(
-                modality=ModalityType.VOICE,
-                data=wav_bytes,
-                format="wav",
-                duration_sec=duration,
-                metadata={
-                    "voice": voice,
-                    "speed": speed,
-                    "sample_rate": sample_rate,
-                    "total_samples": len(samples),
-                },
-            )
         except Exception as e:
+            _tts_synth_ok = False
+            _tts_synth_err = str(e)
             self._state.status = ModuleStatus.ERROR
             self._state.error = str(e)
+            # Emit failure phase event before re-raising
+            try:
+                from chat_flow_log import get_chat_flow_log
+
+                get_chat_flow_log().emit_phase(
+                    phase_name="tts_synthesize",
+                    session_id=_session_id,
+                    message_id=_msg_id,
+                    duration_ms=int((time.perf_counter() - _synth_t0) * 1000),
+                    ok=False,
+                    error=_tts_synth_err,
+                )
+            except Exception:  # noqa: BLE001
+                pass
             raise
+
+        _synth_ms = int((time.perf_counter() - _synth_t0) * 1000)
+        try:
+            from chat_flow_log import get_chat_flow_log
+
+            get_chat_flow_log().emit_phase(
+                phase_name="tts_synthesize",
+                session_id=_session_id,
+                message_id=_msg_id,
+                duration_ms=_synth_ms,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+        wav_bytes = _encode_wav(samples, sample_rate)
+        duration = len(samples) / sample_rate
+
+        # tts_playback_start: time from synth-complete to WAV bytes ready for
+        # delivery.  Covers _encode_wav() overhead — typically <5ms but visible
+        # when the sample buffer is large.
+        _playback_start_ms = int((time.perf_counter() - _synth_t0) * 1000) - _synth_ms
+        try:
+            from chat_flow_log import get_chat_flow_log
+
+            get_chat_flow_log().emit_phase(
+                phase_name="tts_playback_start",
+                session_id=_session_id,
+                message_id=_msg_id,
+                duration_ms=max(0, _playback_start_ms),
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+        self._state.status = ModuleStatus.IDLE
+        self._state.last_output_text = intent.content[:100]
+        self._state.progress = 1.0
+
+        return EncodedOutput(
+            modality=ModalityType.VOICE,
+            data=wav_bytes,
+            format="wav",
+            duration_sec=duration,
+            metadata={
+                "voice": voice,
+                "speed": speed,
+                "sample_rate": sample_rate,
+                "total_samples": len(samples),
+            },
+        )
 
 
 # ---------------------------------------------------------------------------
