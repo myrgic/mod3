@@ -1920,21 +1920,95 @@ async def ws_audio(websocket: WebSocket, session_id: str):
     subscribers registry tracks liveness, so the very next
     ``/v1/sessions/<sid>/subscribers`` probe returns ``subscribed: false``.
 
-    Client → server frames are ignored for v1. A future revision may use
-    them for barge-in signaling or playback ack, but today the dashboard's
-    existing ``/ws/chat`` channel carries those events.
+    Client → server frames are ignored for v1 (binary-only path). RTVI 1.3.0
+    clients send a JSON ``client-ready`` handshake on connect; the server
+    replies with ``bot-ready`` before entering the drain loop. Binary-only
+    clients that skip the handshake are tolerated silently.
+
+    RTVI 1.3.0 wire shapes (B+ workstream, see docs/rtvi/G2-decision-record.md):
+      Inbound:  {"label":"rtvi-ai","type":"client-ready","id":"<uuid>",
+                 "data":{"version":"1.3.0","about":{...}}}
+      Outbound: {"label":"rtvi-ai","type":"bot-ready","id":"<client-ready-id>",
+                 "data":{"version":"1.3.0","about":{"server":"mod3","version":"0.5.0"}}}
     """
+    _RTVI_PROTOCOL_VERSION = "1.3.0"
+    _RTVI_HANDSHAKE_TIMEOUT = 5.0  # seconds to wait for client-ready before giving up
+
     await websocket.accept()
     subs = get_default_audio_subscribers()
     loop = asyncio.get_running_loop()
     subscriber = subs.register(session_id, websocket, loop)
     try:
-        # Keep the connection open; drain any client frames so the socket
-        # close handshake fires promptly.
+        # --- RTVI 1.3.0 handshake (T2) ----------------------------------------
+        # Attempt to receive client-ready. On timeout or non-JSON, continue without
+        # handshake (legacy binary-only clients are tolerated).
+        try:
+            first_msg = await asyncio.wait_for(
+                websocket.receive(),
+                timeout=_RTVI_HANDSHAKE_TIMEOUT,
+            )
+            text = first_msg.get("text") if first_msg.get("type") != "websocket.disconnect" else None
+            if text:
+                try:
+                    parsed = json.loads(text)
+                    msg_type = parsed.get("type")
+                    msg_id = parsed.get("id", str(uuid.uuid4()))
+                    if msg_type == "client-ready":
+                        data = parsed.get("data") or {}
+                        version_str = data.get("version", "")
+                        major = int(version_str.split(".")[0]) if version_str else 0
+                        if major != 1:
+                            # Major version mismatch — reject with RTVI error frame.
+                            error_frame = json.dumps({
+                                "label": "rtvi-ai",
+                                "type": "error",
+                                "id": msg_id,
+                                "data": {
+                                    "error": (
+                                        f"RTVI major version mismatch: "
+                                        f"client={version_str!r} server={_RTVI_PROTOCOL_VERSION!r}"
+                                    ),
+                                    "fatal": True,
+                                },
+                            })
+                            await websocket.send_text(error_frame)
+                            await websocket.close()
+                            return
+                        # Version OK — send bot-ready.
+                        bot_ready = json.dumps({
+                            "label": "rtvi-ai",
+                            "type": "bot-ready",
+                            "id": msg_id,
+                            "data": {
+                                "version": _RTVI_PROTOCOL_VERSION,
+                                "about": {"server": "mod3", "version": "0.5.0"},
+                            },
+                        })
+                        await websocket.send_text(bot_ready)
+                        logger.debug(
+                            "/ws/audio/%s: RTVI handshake complete (client version=%s)",
+                            session_id,
+                            version_str,
+                        )
+                    elif msg_type == "websocket.disconnect":
+                        # Client disconnected before handshake — fall through to finally.
+                        return
+                    # Any other RTVI type before handshake is silently ignored;
+                    # we proceed to the drain loop.
+                except (json.JSONDecodeError, ValueError, AttributeError, IndexError):
+                    pass  # non-JSON or malformed: tolerate as legacy binary-only client
+            elif first_msg.get("type") == "websocket.disconnect":
+                return  # immediate disconnect
+        except asyncio.TimeoutError:
+            pass  # no handshake frame received — tolerate as legacy client
+        # --- drain loop -------------------------------------------------------
+        # Keep the connection open; drain client frames so the socket close
+        # handshake fires promptly. T5 adds disconnect-bot handling here.
         while True:
             msg = await websocket.receive()
             if msg.get("type") == "websocket.disconnect":
                 break
+            # TODO(T5): handle disconnect-bot graceful close here.
     except Exception as exc:  # noqa: BLE001 — disconnect is the normal exit
         logger.debug("/ws/audio/%s disconnect: %s", session_id, exc)
     finally:
