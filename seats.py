@@ -38,7 +38,7 @@ logger = logging.getLogger("mod3.seats")
 # Data model
 # ---------------------------------------------------------------------------
 
-VALID_CLIENT_TYPES = frozenset({"claude-code-channel", "generic"})
+VALID_CLIENT_TYPES = frozenset({"claude-code-channel", "generic", "rtvi-client"})
 
 _SEAT_TTL_SECONDS = 3600  # seats auto-expire after 1 hour of inactivity
 

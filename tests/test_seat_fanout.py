@@ -22,7 +22,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from seats import Seat, SeatRegistry  # noqa: E402
+from seats import VALID_CLIENT_TYPES, Seat, SeatRegistry  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -53,6 +53,22 @@ def _drain(seat: Seat) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Unit: VALID_CLIENT_TYPES
+# ---------------------------------------------------------------------------
+
+
+class TestValidClientTypes:
+    def test_contains_rtvi_client(self):
+        assert "rtvi-client" in VALID_CLIENT_TYPES
+
+    def test_contains_legacy_types(self):
+        assert "claude-code-channel" in VALID_CLIENT_TYPES
+        assert "generic" in VALID_CLIENT_TYPES
+
+    def test_is_frozenset(self):
+        assert isinstance(VALID_CLIENT_TYPES, frozenset)
+
+
 # Unit: SeatRegistry.fan_out
 # ---------------------------------------------------------------------------
 
