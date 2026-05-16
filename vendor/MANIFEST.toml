@@ -1,0 +1,78 @@
+# mod3/vendor/MANIFEST.toml
+# Vendored upstream OSS — rung 1 of the vendoring-as-metabolism ladder.
+# Each entry records provenance: upstream, version, SHA, license, files.
+# On rung 1: pinned copy, no patches. Move up the ladder if patches accumulate
+# or supply-chain risk materialises (rung 2 = local mirror, rung 3 = fork).
+# Template: feedback_vendoring_as_metabolism (substrate memory).
+
+schema_version = "1"
+updated = "2026-05-16"
+
+# ─────────────────────────────────────────────────────────────────────────────
+[pipecat_vad]
+# Silero VAD implementation from pipecat-ai/pipecat.
+upstream_repo   = "https://github.com/pipecat-ai/pipecat"
+upstream_tag    = "v1.2.1"
+upstream_sha    = "f8caa0da2b4c0788b9ffe31fbf44d5cdd5189a89"
+license         = "BSD-2-Clause"
+license_file    = "https://github.com/pipecat-ai/pipecat/blob/main/LICENSE"
+vendor_path     = "vendor/pipecat_vad/"
+rung            = 1
+notes           = """
+Files copied:
+  src/pipecat/audio/vad/silero.py        → vendor/pipecat_vad/silero.py
+  src/pipecat/audio/vad/vad_analyzer.py  → vendor/pipecat_vad/vad_analyzer.py
+  src/pipecat/audio/vad/data/silero_vad.onnx → vendor/pipecat_vad/data/silero_vad.onnx
+
+Modifications:
+  silero.py: model load path changed from importlib_resources (pipecat package)
+  to local vendor/pipecat_vad/data/silero_vad.onnx. Import of pipecat.audio.utils
+  inlined into vad_analyzer.py. No functional logic changed.
+
+  vad_analyzer.py: calculate_audio_volume and exp_smoothing inlined
+  (upstream imports pipecat.audio.utils which is outside scope of this vendor).
+  No functional logic changed.
+"""
+
+# ONNX model provenance
+[pipecat_vad.model]
+filename = "silero_vad.onnx"
+source   = "pipecat-ai/pipecat@v1.2.1:src/pipecat/audio/vad/data/silero_vad.onnx"
+size_bytes = 2327524
+origin   = "snakers4/silero-vad (MIT license)"
+
+# ─────────────────────────────────────────────────────────────────────────────
+[smart_turn]
+# Smart Turn v3 end-of-utterance detector from pipecat-ai/smart-turn.
+upstream_repo   = "https://github.com/pipecat-ai/smart-turn"
+upstream_tag    = ""  # no tag on this repo; pinned to HEAD
+upstream_sha    = "4786657e242d"  # HEAD at 2026-05-16
+license         = "BSD-2-Clause"
+license_file    = "https://github.com/pipecat-ai/smart-turn/blob/main/LICENSE"
+vendor_path     = "vendor/smart_turn/"
+rung            = 1
+notes           = """
+Files copied:
+  inference.py   → vendor/smart_turn/inference.py
+  audio_utils.py → vendor/smart_turn/audio_utils.py
+
+Modifications:
+  inference.py: ONNX_MODEL_PATH changed from relative CWD path to
+  vendor-relative absolute path. Lazy session loading added (import-safe
+  when weight file not yet present). Import of audio_utils adjusted to
+  vendor-relative import. No functional logic changed.
+
+ONNX weight file (smart-turn-v3.1.onnx) is NOT included in git — it is a
+large binary (~100MB). Fetch it separately from HuggingFace:
+  hf_hub_download(repo_id='pipecat-ai/smart-turn', filename='smart-turn-v3.1.onnx')
+See vendor/smart_turn/data/README.md for the download command.
+"""
+
+# HuggingFace weight pin
+[smart_turn.hf_weight]
+repo_id  = "pipecat-ai/smart-turn"
+filename = "smart-turn-v3.1.onnx"
+# Pin the revision once the weight is fetched and its sha256 is verified.
+# Run: python -c "from huggingface_hub import model_info; print(model_info('pipecat-ai/smart-turn').sha)"
+revision = ""  # TODO: fill after first fetch
+sha256   = ""  # TODO: fill after first fetch
