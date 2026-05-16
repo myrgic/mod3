@@ -1930,6 +1930,23 @@ async def ws_audio(websocket: WebSocket, session_id: str):
                  "data":{"version":"1.3.0","about":{...}}}
       Outbound: {"label":"rtvi-ai","type":"bot-ready","id":"<client-ready-id>",
                  "data":{"version":"1.3.0","about":{"server":"mod3","version":"0.5.0"}}}
+
+    After handshake, clients may send JSON-framed inbound audio (``raw-audio``)
+    and VAD signals (``user-started-speaking`` / ``user-stopped-speaking``).
+    These are routed to the existing VAD/STT pipeline via ``_bus.perceive()``.
+    Clients may also send ``disconnect-bot`` to request a graceful close.
+
+    Note: a simultaneously active mic path (InboundPipeline) will process audio
+    in parallel. WS-source audio and mic audio do not conflict at the bus level —
+    both enter ``perceive()`` independently. Use the ``MOD3_DISABLE_MIC`` env
+    var to suppress the mic path when a WS client is the sole source.
+
+    RTVI 1.3.0 inbound types handled in the drain loop (B+ workstream):
+      raw-audio:        T3 — base64 int16 PCM 16kHz routed to VAD/STT pipeline
+      raw-audio-batch:  T3 — batch variant of raw-audio
+      user-started-speaking: T3 — client-side VAD onset signal
+      user-stopped-speaking: T3 — client-side VAD offset signal
+      disconnect-bot:   T5 — client-initiated graceful close
     """
     _RTVI_PROTOCOL_VERSION = "1.3.0"
     _RTVI_HANDSHAKE_TIMEOUT = 5.0  # seconds to wait for client-ready before giving up
@@ -2012,15 +2029,47 @@ async def ws_audio(websocket: WebSocket, session_id: str):
             msg = await websocket.receive()
             if msg.get("type") == "websocket.disconnect":
                 break
-            # RTVI 1.3.0: handle disconnect-bot graceful close request.
+            # RTVI 1.3.0: dispatch inbound JSON frames (T3 raw-audio/VAD + T5 disconnect-bot).
             text = msg.get("text")
             if text:
                 try:
                     parsed = json.loads(text)
-                    if parsed.get("type") == "disconnect-bot":
+                    rtvi_type = parsed.get("type")
+                    if rtvi_type == "disconnect-bot":
                         logger.debug("/ws/audio/%s: disconnect-bot received, closing", session_id)
                         break
-                except (json.JSONDecodeError, AttributeError):
+                    elif rtvi_type in ("raw-audio", "raw-audio-batch"):
+                        # Decode base64 int16 PCM and route to VAD/STT pipeline.
+                        data = parsed.get("data") or {}
+                        audio_b64 = data.get("audio", "")
+                        if audio_b64:
+                            import base64 as _base64
+                            import numpy as _np
+                            pcm_bytes = _base64.b64decode(audio_b64)
+                            # Convert int16 LE bytes → float32 for ModalityBus.perceive()
+                            pcm_int16 = _np.frombuffer(pcm_bytes, dtype=_np.int16)
+                            pcm_float32 = pcm_int16.astype(_np.float32) / 32768.0
+                            raw_bytes = pcm_float32.tobytes()
+                            try:
+                                _ensure_bus_modules()
+                                _bus.perceive(
+                                    raw_bytes,
+                                    modality="voice",
+                                    channel=f"rtvi-ws:{session_id}",
+                                )
+                            except Exception as exc:  # noqa: BLE001
+                                logger.debug(
+                                    "/ws/audio/%s raw-audio perceive error: %s",
+                                    session_id,
+                                    exc,
+                                )
+                    elif rtvi_type == "user-started-speaking":
+                        # Client-side VAD onset — log for now; future: bypass Silero VAD
+                        logger.debug("/ws/audio/%s: user-started-speaking (client VAD)", session_id)
+                    elif rtvi_type == "user-stopped-speaking":
+                        # Client-side utterance boundary — log for now; future: trigger endpointing
+                        logger.debug("/ws/audio/%s: user-stopped-speaking (client VAD)", session_id)
+                except (json.JSONDecodeError, AttributeError, ValueError):
                     pass  # ignore non-JSON or malformed frames
     except Exception as exc:  # noqa: BLE001 — disconnect is the normal exit
         logger.debug("/ws/audio/%s disconnect: %s", session_id, exc)
