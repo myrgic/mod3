@@ -225,6 +225,7 @@ class AgentLoop:
         # RTVI T4 — bot-llm-started before inference begins.
         try:
             from audio_subscribers import get_default_audio_subscribers as _get_rtvi_subs
+
             _get_rtvi_subs().emit_bot_llm_started(self.channel_id)
         except Exception:
             pass  # best-effort; never block inference
@@ -240,6 +241,7 @@ class AgentLoop:
         # RTVI T4 — bot-llm-stopped after inference returns.
         try:
             from audio_subscribers import get_default_audio_subscribers as _get_rtvi_subs
+
             _get_rtvi_subs().emit_bot_llm_stopped(self.channel_id)
         except Exception:
             pass  # best-effort
@@ -396,6 +398,7 @@ class AgentLoop:
             # RTVI T4 — bot-transcription after response is complete.
             try:
                 from audio_subscribers import get_default_audio_subscribers as _get_rtvi_subs
+
                 _get_rtvi_subs().emit_bot_transcription(self.channel_id, assistant_text, is_final=True)
             except Exception:
                 pass  # best-effort; ACP and channel delivery above are the primary paths

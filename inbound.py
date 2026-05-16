@@ -228,6 +228,7 @@ class InboundPipeline:
         # Wire a real session_id when the pipeline is session-scoped.
         try:
             from audio_subscribers import get_default_audio_subscribers as _get_subs
+
             _get_subs().emit_user_started_speaking("default")
         except Exception:
             pass  # best-effort; never block the VAD path
@@ -258,6 +259,7 @@ class InboundPipeline:
         # RTVI T4 — user-stopped-speaking at utterance boundary.
         try:
             from audio_subscribers import get_default_audio_subscribers as _get_subs
+
             _get_subs().emit_user_stopped_speaking("default")
         except Exception:
             pass  # best-effort
@@ -282,6 +284,7 @@ class InboundPipeline:
         # RTVI T4 — user-transcription on successful STT result.
         try:
             from audio_subscribers import get_default_audio_subscribers as _get_subs
+
             _get_subs().emit_user_transcription("default", event.content, is_final=True)
         except Exception:
             pass  # best-effort; ACP delivery above is the primary path

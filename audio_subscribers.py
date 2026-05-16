@@ -203,7 +203,6 @@ class AudioSubscriberRegistry:
         )
         return delivered
 
-
     # ------------------------------------------------------------------
     # RTVI 1.3.0 transcript + speaking-lifecycle emit (T4 / B+ workstream)
     # ------------------------------------------------------------------
