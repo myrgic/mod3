@@ -22,7 +22,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from seats import Seat, SeatRegistry, VALID_CLIENT_TYPES  # noqa: E402
+from seats import VALID_CLIENT_TYPES, Seat, SeatRegistry  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Helpers
