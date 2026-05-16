@@ -2043,8 +2043,8 @@ async def ws_audio(websocket: WebSocket, session_id: str):
                         data = parsed.get("data") or {}
                         audio_b64 = data.get("audio", "")
                         if audio_b64:
-                            import base64 as _base64
-                            import numpy as _np
+                            import base64 as _base64  # noqa: I001,PLC0415
+                            import numpy as _np  # noqa: PLC0415
                             pcm_bytes = _base64.b64decode(audio_b64)
                             # Convert int16 LE bytes → float32 for ModalityBus.perceive()
                             pcm_int16 = _np.frombuffer(pcm_bytes, dtype=_np.int16)
