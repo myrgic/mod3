@@ -351,6 +351,76 @@ class TestRtviCompatibility:
 
 
 # ---------------------------------------------------------------------------
+# RTVI T5: disconnect-bot graceful close
+# ---------------------------------------------------------------------------
+
+
+class TestDisconnectBot:
+    """Verify that a 'disconnect-bot' RTVI frame causes the ws_audio handler
+    to close the connection and unregister the subscriber cleanly.
+    """
+
+    @pytest.fixture
+    def client(self):
+        from fastapi.testclient import TestClient
+
+        import http_api
+
+        return TestClient(http_api.app)
+
+    @pytest.fixture(autouse=True)
+    def _isolate_subscribers(self):
+        reset_default_audio_subscribers()
+        yield
+        reset_default_audio_subscribers()
+
+    def test_disconnect_bot_closes_and_unregisters(self, client):
+        """Sending disconnect-bot should close the WS and deregister subscriber."""
+        from audio_subscribers import get_default_audio_subscribers
+
+        subs = get_default_audio_subscribers()
+        sid = "test-disconnect-bot-1"
+
+        with client.websocket_connect(f"/ws/audio/{sid}") as ws:
+            assert subs.has_subscribers(sid)
+            ws.send_text('{"label":"rtvi-ai","type":"disconnect-bot","id":"test-id-1","data":{}}')
+            # After sending disconnect-bot the server closes; receive() raises or returns close
+            try:
+                ws.receive_text()
+            except Exception:
+                pass  # expected — server closed
+
+        # Subscriber must be cleaned up
+        assert not subs.has_subscribers(sid)
+
+    def test_non_json_frame_does_not_crash(self, client):
+        """Non-JSON frames should be silently ignored, not crash the handler."""
+        from audio_subscribers import get_default_audio_subscribers
+
+        subs = get_default_audio_subscribers()
+        sid = "test-disconnect-bot-2"
+
+        with client.websocket_connect(f"/ws/audio/{sid}") as ws:
+            ws.send_text("not-valid-json")
+            # Connection should still be open (server tolerates non-JSON)
+            assert subs.has_subscribers(sid)
+
+    def test_other_rtvi_type_does_not_close(self, client):
+        """A text frame with a different RTVI type should not close the connection."""
+        from audio_subscribers import get_default_audio_subscribers
+
+        subs = get_default_audio_subscribers()
+        sid = "test-disconnect-bot-3"
+
+        with client.websocket_connect(f"/ws/audio/{sid}") as ws:
+            ws.send_text(
+                '{"label":"rtvi-ai","type":"client-ready","id":"some-id","data":{"version":"1.3.0","about":{}}}'
+            )
+            # Connection must still be alive
+            assert subs.has_subscribers(sid)
+
+
+# ---------------------------------------------------------------------------
 # Integration: /v1/synthesize routes RTVI frames to WS subscriber
 # ---------------------------------------------------------------------------
 
