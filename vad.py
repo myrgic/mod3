@@ -178,3 +178,90 @@ def is_hallucination(text: str) -> bool:
     """Check if transcription is a known Whisper hallucination."""
     cleaned = text.strip().lower().rstrip(".!?,")
     return cleaned in HALLUCINATION_PHRASES
+
+
+# ---------------------------------------------------------------------------
+# Pipecat-compatible voice_confidence wrapper (F2)
+# ---------------------------------------------------------------------------
+#
+# The vendored pipecat VAD (vendor/pipecat_vad/silero.py) exposes
+# SileroVADAnalyzer.voice_confidence(buffer: bytes) -> float on a stateful
+# analyzer instance.  This module-level wrapper provides a synchronous,
+# stateless-looking interface that re-uses a lazily-initialized process-global
+# SileroVADAnalyzer for callers that only need a confidence score without
+# managing a full VADAnalyzer lifecycle.
+#
+# The analyzer is initialised at 16 kHz (mod3's default sample rate).
+# Callers that need 8 kHz or per-stream state should instantiate
+# SileroVADAnalyzer directly from vendor.pipecat_vad.
+#
+# Behavioural note: SileroVADAnalyzer.voice_confidence() accepts raw int16 PCM
+# bytes and returns a float in [0, 1].  The underlying ONNX session is
+# single-threaded (inter_op_num_threads=1); concurrent calls from multiple
+# threads are safe because the lock is managed at the analyzer level.
+
+_pipecat_analyzer = None
+_pipecat_analyzer_lock = threading.Lock()
+
+
+def _get_pipecat_analyzer():
+    """Return (or lazily construct) the process-global SileroVADAnalyzer."""
+    global _pipecat_analyzer
+    if _pipecat_analyzer is None:
+        with _pipecat_analyzer_lock:
+            if _pipecat_analyzer is None:
+                try:
+                    from vendor.pipecat_vad.silero import SileroVADAnalyzer
+                    from vendor.pipecat_vad.vad_analyzer import VADParams
+
+                    analyzer = SileroVADAnalyzer(
+                        sample_rate=16000,
+                        params=VADParams(),
+                    )
+                    analyzer.set_sample_rate(16000)
+                    _pipecat_analyzer = analyzer
+                except Exception as exc:  # noqa: BLE001
+                    # Vendor not available (onnxruntime not installed, etc.)
+                    # Fall back to None; callers check is_pipecat_vad_available().
+                    import logging as _logging
+
+                    _logging.getLogger("mod3.vad").warning(
+                        "pipecat SileroVADAnalyzer unavailable: %s", exc
+                    )
+    return _pipecat_analyzer
+
+
+def is_pipecat_vad_available() -> bool:
+    """Return True if the vendored pipecat SileroVADAnalyzer loaded successfully."""
+    return _get_pipecat_analyzer() is not None
+
+
+def voice_confidence(buffer: bytes, sample_rate: int = 16000) -> float:
+    """Return voice activity confidence [0.0, 1.0] for raw int16 PCM bytes.
+
+    Uses the vendored pipecat SileroVADAnalyzer (ONNX-based) for inference.
+    The buffer must contain int16 little-endian PCM at ``sample_rate`` Hz.
+    For 16 kHz the buffer must be exactly 512 samples (1024 bytes); for 8 kHz,
+    256 samples (512 bytes) — these are the frame sizes Silero requires.
+
+    Falls back to 0.0 if the vendor is not available (onnxruntime not installed).
+
+    Args:
+        buffer: Raw int16 PCM bytes.
+        sample_rate: Sample rate of the buffer. Must be 8000 or 16000.
+
+    Returns:
+        Voice confidence in [0.0, 1.0].
+    """
+    analyzer = _get_pipecat_analyzer()
+    if analyzer is None:
+        return 0.0
+    if analyzer.sample_rate != sample_rate:
+        # Rate mismatch: the global instance is 16kHz. For other rates, fall
+        # back to the existing detect_speech path which handles resampling.
+        result = detect_speech(
+            np.frombuffer(buffer, dtype=np.int16).astype(np.float32) / 32768.0,
+            sample_rate=sample_rate,
+        )
+        return result.confidence
+    return float(analyzer.voice_confidence(buffer))
