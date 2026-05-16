@@ -321,14 +321,10 @@ class InboundPipeline:
                         # Smart Turn expects float32 at 16kHz; ensure dtype.
                         if candidate.dtype != np.float32:
                             candidate = candidate.astype(np.float32)
-                        prediction = self._smart_turn_detector.predict(
-                            candidate, sample_rate=self._sample_rate
-                        )
+                        prediction = self._smart_turn_detector.predict(candidate, sample_rate=self._sample_rate)
                         if prediction.skipped:
                             # Model unavailable this call — accept the boundary
-                            logger.debug(
-                                "Smart Turn skipped (unavailable); accepting VAD boundary"
-                            )
+                            logger.debug("Smart Turn skipped (unavailable); accepting VAD boundary")
                             break
                         if prediction.is_complete:
                             logger.debug(

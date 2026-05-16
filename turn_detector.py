@@ -112,12 +112,11 @@ class SmartTurnDetector:
             if self._loaded is not None:
                 return
             try:
-                from vendor.smart_turn.inference import predict_endpoint, ONNX_MODEL_PATH
+                from vendor.smart_turn.inference import ONNX_MODEL_PATH, predict_endpoint
 
                 if not os.path.exists(ONNX_MODEL_PATH):
                     logger.warning(
-                        "Smart Turn weight file not found at %s. "
-                        "Run scripts/fetch_smart_turn_weights.py to download.",
+                        "Smart Turn weight file not found at %s. Run scripts/fetch_smart_turn_weights.py to download.",
                         ONNX_MODEL_PATH,
                     )
                     self._loaded = False
@@ -152,9 +151,7 @@ class SmartTurnDetector:
             return TurnPrediction(is_complete=True, probability=1.0, skipped=True)
 
         if sample_rate != 16000:
-            logger.debug(
-                "Smart Turn requires 16kHz input; got %dHz — returning skipped", sample_rate
-            )
+            logger.debug("Smart Turn requires 16kHz input; got %dHz — returning skipped", sample_rate)
             return TurnPrediction(is_complete=True, probability=1.0, skipped=True)
 
         if not isinstance(audio, np.ndarray):

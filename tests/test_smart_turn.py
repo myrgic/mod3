@@ -14,6 +14,7 @@ directory is not present (i.e. before the Wave 0 PR is merged).
 from __future__ import annotations
 
 import threading
+
 import numpy as np
 import pytest
 
@@ -36,12 +37,15 @@ class TestSmartTurnDetectorUnavailable:
     def setup_method(self):
         # Reset the module-level singleton between tests
         from turn_detector import reset_default_smart_turn_detector
+
         reset_default_smart_turn_detector()
 
     def test_is_available_returns_false_when_weight_absent(self, tmp_path, monkeypatch):
         """is_available() returns False when the ONNX weight file is missing."""
-        from turn_detector import SmartTurnDetector
         import vendor.smart_turn.inference as infer_mod
+
+        from turn_detector import SmartTurnDetector
+
         monkeypatch.setattr(infer_mod, "ONNX_MODEL_PATH", str(tmp_path / "nonexistent.onnx"))
 
         detector = SmartTurnDetector()
@@ -49,8 +53,10 @@ class TestSmartTurnDetectorUnavailable:
 
     def test_predict_returns_skipped_when_unavailable(self, tmp_path, monkeypatch):
         """predict() returns skipped=True and is_complete=True when unavailable."""
-        from turn_detector import SmartTurnDetector
         import vendor.smart_turn.inference as infer_mod
+
+        from turn_detector import SmartTurnDetector
+
         monkeypatch.setattr(infer_mod, "ONNX_MODEL_PATH", str(tmp_path / "nonexistent.onnx"))
 
         detector = SmartTurnDetector()
@@ -62,8 +68,10 @@ class TestSmartTurnDetectorUnavailable:
 
     def test_predict_skips_wrong_sample_rate(self, tmp_path, monkeypatch):
         """predict() returns skipped=True for non-16kHz input."""
-        from turn_detector import SmartTurnDetector
         import vendor.smart_turn.inference as infer_mod
+
+        from turn_detector import SmartTurnDetector
+
         monkeypatch.setattr(infer_mod, "ONNX_MODEL_PATH", str(tmp_path / "nonexistent.onnx"))
 
         detector = SmartTurnDetector()
@@ -90,6 +98,7 @@ class TestSmartTurnDetectorSingleton:
 
     def setup_method(self):
         from turn_detector import reset_default_smart_turn_detector
+
         reset_default_smart_turn_detector()
 
     def test_get_default_returns_same_instance(self):
@@ -115,6 +124,7 @@ class TestSmartTurnDetectorSingleton:
     def test_thread_safety_of_singleton(self):
         """Concurrent calls to get_default_smart_turn_detector return one instance."""
         from turn_detector import get_default_smart_turn_detector, reset_default_smart_turn_detector
+
         reset_default_smart_turn_detector()
 
         results = []
@@ -172,6 +182,7 @@ class TestInboundPipelineSmartTurnParam:
             pytest.skip(f"InboundPipeline import unavailable ({e})")
 
         import vendor.smart_turn.inference as infer_mod
+
         monkeypatch.setattr(infer_mod, "ONNX_MODEL_PATH", str(tmp_path / "nonexistent.onnx"))
 
         from unittest.mock import MagicMock
@@ -194,6 +205,7 @@ class TestInboundPipelineSmartTurnParam:
 
         # Manually trigger the Smart Turn init block
         from turn_detector import SmartTurnDetector
+
         detector = SmartTurnDetector()
         # detector.is_available() is False (no weight file)
         assert not detector.is_available()
