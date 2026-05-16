@@ -52,9 +52,16 @@ class SileroOnnxModel:
         opts.inter_op_num_threads = 1
         opts.intra_op_num_threads = 1
 
+        # Provider order: CoreML EP first for Apple Silicon Neural Engine / GPU
+        # acceleration; CPU EP fallback on Linux/Windows or for unsupported ops.
+        # ONNX Runtime silently drops unavailable providers, so this list is
+        # safe cross-platform. force_onnx_cpu is preserved for callers that need
+        # a strict CPU-only guarantee (e.g. reproducibility testing).
         if force_onnx_cpu and "CPUExecutionProvider" in onnxruntime.get_available_providers():
             self.session = onnxruntime.InferenceSession(
-                path, providers=["CPUExecutionProvider"], sess_options=opts
+                path,
+                providers=["CoreMLExecutionProvider", "CPUExecutionProvider"],
+                sess_options=opts,
             )
         else:
             self.session = onnxruntime.InferenceSession(path, sess_options=opts)
