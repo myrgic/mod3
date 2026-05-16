@@ -43,10 +43,12 @@ origin   = "snakers4/silero-vad (MIT license)"
 
 # ─────────────────────────────────────────────────────────────────────────────
 [smart_turn]
-# Smart Turn v3 end-of-utterance detector from pipecat-ai/smart-turn.
-upstream_repo   = "https://github.com/pipecat-ai/smart-turn"
-upstream_tag    = ""  # no tag on this repo; pinned to HEAD
-upstream_sha    = "4786657e242d"  # HEAD at 2026-05-16
+# Smart Turn v3 end-of-utterance detector from pipecat-ai/smart-turn-v3.
+# Source repo: pipecat-ai/smart-turn-v3 (HuggingFace model repo, ONNX-canonical)
+# NOT pipecat-ai/smart-turn (the PyTorch safetensors repo, ~2.3 GB).
+upstream_repo   = "https://huggingface.co/pipecat-ai/smart-turn-v3"
+upstream_tag    = ""  # HF model repos use commit SHAs, not tags
+upstream_sha    = "f766f81d3cfdf7737ac64aad813d91bbfd56bf93"  # HEAD at 2026-05-16
 license         = "BSD-2-Clause"
 license_file    = "https://github.com/pipecat-ai/smart-turn/blob/main/LICENSE"
 vendor_path     = "vendor/smart_turn/"
@@ -58,21 +60,30 @@ Files copied:
 
 Modifications:
   inference.py: ONNX_MODEL_PATH changed from relative CWD path to
-  vendor-relative absolute path. Lazy session loading added (import-safe
-  when weight file not yet present). Import of audio_utils adjusted to
-  vendor-relative import. No functional logic changed.
+  vendor-relative absolute path pointing at smart-turn-v3.2-cpu.onnx.
+  Lazy session loading added (import-safe when weight file not yet present).
+  Import of audio_utils adjusted to vendor-relative import.
+  CoreML + CPU execution providers added to build_session() for Apple Silicon
+  Neural Engine acceleration (graceful fallback on Linux/Windows).
 
-ONNX weight file (smart-turn-v3.1.onnx) is NOT included in git — it is a
-large binary (~100MB). Fetch it separately from HuggingFace:
-  hf_hub_download(repo_id='pipecat-ai/smart-turn', filename='smart-turn-v3.1.onnx')
-See vendor/smart_turn/data/README.md for the download command.
+ONNX weight file is committed directly to the repo at rung 1 (mirrors the
+Silero VAD pattern). The int8 CPU export (smart-turn-v3.2-cpu.onnx) is only
+8.7 MB — well within git-LFS-free range. No runtime fetch step required.
 """
 
-# HuggingFace weight pin
-[smart_turn.hf_weight]
-repo_id  = "pipecat-ai/smart-turn"
-filename = "smart-turn-v3.1.onnx"
-# Pin the revision once the weight is fetched and its sha256 is verified.
-# Run: python -c "from huggingface_hub import model_info; print(model_info('pipecat-ai/smart-turn').sha)"
-revision = ""  # TODO: fill after first fetch
-sha256   = ""  # TODO: fill after first fetch
+# ONNX model provenance
+[smart_turn.model]
+filename          = "smart-turn-v3.2-cpu.onnx"
+upstream_repo     = "https://huggingface.co/pipecat-ai/smart-turn-v3"
+upstream_revision = "f766f81d3cfdf7737ac64aad813d91bbfd56bf93"
+sha256            = "2bb026316b14a660486a75b1733cd3fbab8c2fd0314dc9af7be49f8cca967e4f"
+size_bytes        = 8713168
+rung              = 1
+notes             = """
+int8 quantized CPU export from pipecat-ai/smart-turn-v3 benchmarks/.
+Downloaded via:
+  curl -L https://huggingface.co/pipecat-ai/smart-turn-v3/resolve/main/smart-turn-v3.2-cpu.onnx
+No HuggingFace auth required (public model). Committed at rung 1 so the
+repo is self-contained: clone + pip install is all that's needed to run
+inference. Same rung-1 approach as vendor/pipecat_vad/data/silero_vad.onnx.
+"""

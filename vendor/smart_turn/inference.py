@@ -25,16 +25,24 @@ from vendor.smart_turn.audio_utils import truncate_audio_to_last_n_seconds
 
 # Vendor-relative model path — resolved at import time.
 _VENDOR_DIR = os.path.dirname(os.path.abspath(__file__))
-ONNX_MODEL_PATH = os.path.join(_VENDOR_DIR, "data", "smart-turn-v3.1.onnx")
+ONNX_MODEL_PATH = os.path.join(_VENDOR_DIR, "data", "smart-turn-v3.2-cpu.onnx")
 
 
 def build_session(onnx_path: str = ONNX_MODEL_PATH) -> ort.InferenceSession:
-    """Build an ONNX InferenceSession with deterministic single-threaded config."""
+    """Build an ONNX InferenceSession with deterministic single-threaded config.
+
+    Provider order: CoreML EP first so ONNX Runtime uses Apple Silicon Neural
+    Engine / GPU acceleration when available (macOS, onnxruntime-silicon builds).
+    CPU EP is the fallback for Linux, Windows, or any op not supported by CoreML.
+    Graceful: ONNX Runtime silently drops unavailable providers rather than
+    raising, so this list is safe to ship cross-platform.
+    """
     so = ort.SessionOptions()
     so.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
     so.inter_op_num_threads = 1
     so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-    return ort.InferenceSession(onnx_path, sess_options=so)
+    providers = ["CoreMLExecutionProvider", "CPUExecutionProvider"]
+    return ort.InferenceSession(onnx_path, sess_options=so, providers=providers)
 
 
 feature_extractor = WhisperFeatureExtractor(chunk_length=8)

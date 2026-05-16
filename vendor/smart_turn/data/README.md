@@ -1,13 +1,9 @@
-# Smart Turn v3.1 ONNX Weight
+# Smart Turn v3.2 ONNX Weight
 
-Place `smart-turn-v3.1.onnx` in this directory before running inference.
+`smart-turn-v3.2-cpu.onnx` is committed directly to this directory (rung-1 vendor).
 
-## Download
+No download step is needed. The file is 8.7 MB (int8 quantized CPU export from
+`pipecat-ai/smart-turn-v3`).
 
-```bash
-# Using HuggingFace CLI
-pip install huggingface_hub
-python -c "from huggingface_hub import hf_hub_download; hf_hub_download(repo_id='pipecat-ai/smart-turn', filename='smart-turn-v3.1.onnx', local_dir='vendor/smart_turn/data')"
-```
-
-Or see `vendor/MANIFEST.toml` for the pinned revision and checksum.
+See `vendor/MANIFEST.toml` [smart_turn.model] for provenance, upstream revision,
+and SHA-256 checksum.
