@@ -2012,7 +2012,16 @@ async def ws_audio(websocket: WebSocket, session_id: str):
             msg = await websocket.receive()
             if msg.get("type") == "websocket.disconnect":
                 break
-            # TODO(T5): handle disconnect-bot graceful close here.
+            # RTVI 1.3.0: handle disconnect-bot graceful close request.
+            text = msg.get("text")
+            if text:
+                try:
+                    parsed = json.loads(text)
+                    if parsed.get("type") == "disconnect-bot":
+                        logger.debug("/ws/audio/%s: disconnect-bot received, closing", session_id)
+                        break
+                except (json.JSONDecodeError, AttributeError):
+                    pass  # ignore non-JSON or malformed frames
     except Exception as exc:  # noqa: BLE001 — disconnect is the normal exit
         logger.debug("/ws/audio/%s disconnect: %s", session_id, exc)
     finally:
