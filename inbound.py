@@ -63,6 +63,7 @@ class InboundPipeline:
         min_silence_duration_sec: float | None = None,
         loop_sleep_sec: float = 0.05,
         bargein_registry=None,
+        use_smart_turn: bool | None = None,
     ):
         self._bus = bus
         self._pipeline_state = pipeline_state
@@ -97,6 +98,18 @@ class InboundPipeline:
         # ``/tmp/mod3-barge-in.json`` file watcher for in-process consumers.
         self._bargein_registry = bargein_registry
 
+        # F5: Smart Turn end-of-utterance detector (optional).
+        # Enabled when use_smart_turn=True or MOD3_SMART_TURN=1 env var.
+        # When enabled, the Smart Turn ONNX model runs after the VAD silence
+        # window closes to confirm the user has finished speaking. If Smart
+        # Turn predicts incomplete (still speaking), accumulation continues.
+        # When unavailable (weight absent, onnxruntime missing), falls back
+        # to VAD-only endpointing transparently.
+        if use_smart_turn is None:
+            use_smart_turn = os.environ.get("MOD3_SMART_TURN", "").strip() in ("1", "true", "yes")
+        self._use_smart_turn = use_smart_turn
+        self._smart_turn_detector = None  # Lazily initialised in start()
+
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._running = False
@@ -112,6 +125,24 @@ class InboundPipeline:
 
         if not self._capture.is_active():
             self._capture.start()
+
+        # F5: Lazily initialise Smart Turn detector if enabled.
+        if self._use_smart_turn and self._smart_turn_detector is None:
+            try:
+                from turn_detector import SmartTurnDetector
+
+                self._smart_turn_detector = SmartTurnDetector()
+                if self._smart_turn_detector.is_available():
+                    logger.info("Smart Turn end-of-utterance detector enabled")
+                else:
+                    logger.warning(
+                        "Smart Turn enabled but unavailable (weight absent or onnxruntime "
+                        "missing); falling back to VAD-only endpointing"
+                    )
+                    self._smart_turn_detector = None
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Smart Turn init failed: %s; falling back to VAD-only", exc)
+                self._smart_turn_detector = None
 
         self._stop_event.clear()
         self._running = True
@@ -280,8 +311,41 @@ class InboundPipeline:
                 # Silence detected — check if we've exceeded the silence window
                 silence_elapsed = time.monotonic() - last_speech_time
                 if silence_elapsed >= self._min_silence_sec:
-                    # Utterance boundary reached
-                    break
+                    # VAD silence window closed — possible utterance boundary.
+                    # F5: If Smart Turn is wired, run it on the accumulated audio
+                    # to confirm the user has finished speaking. If Smart Turn
+                    # predicts incomplete, extend the accumulation window and
+                    # continue reading. Falls back transparently when unavailable.
+                    if self._smart_turn_detector is not None:
+                        candidate = np.concatenate(chunks)
+                        # Smart Turn expects float32 at 16kHz; ensure dtype.
+                        if candidate.dtype != np.float32:
+                            candidate = candidate.astype(np.float32)
+                        prediction = self._smart_turn_detector.predict(candidate, sample_rate=self._sample_rate)
+                        if prediction.skipped:
+                            # Model unavailable this call — accept the boundary
+                            logger.debug("Smart Turn skipped (unavailable); accepting VAD boundary")
+                            break
+                        if prediction.is_complete:
+                            logger.debug(
+                                "Smart Turn: complete (prob=%.3f) — utterance boundary accepted",
+                                prediction.probability,
+                            )
+                            break
+                        else:
+                            # User likely still speaking — extend the silence window.
+                            # Reset the last-speech timer so the window re-opens
+                            # from the current moment rather than stalling forever.
+                            logger.debug(
+                                "Smart Turn: incomplete (prob=%.3f) — extending accumulation",
+                                prediction.probability,
+                            )
+                            last_speech_time = time.monotonic()
+                            chunks.append(chunk)
+                            continue
+                    else:
+                        # VAD-only endpointing — accept the boundary
+                        break
                 # Still within the grace period — keep accumulating
                 # (include the silent tail so Whisper has context)
                 chunks.append(chunk)
