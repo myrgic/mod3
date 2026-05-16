@@ -1959,31 +1959,35 @@ async def ws_audio(websocket: WebSocket, session_id: str):
                         major = int(version_str.split(".")[0]) if version_str else 0
                         if major != 1:
                             # Major version mismatch — reject with RTVI error frame.
-                            error_frame = json.dumps({
-                                "label": "rtvi-ai",
-                                "type": "error",
-                                "id": msg_id,
-                                "data": {
-                                    "error": (
-                                        f"RTVI major version mismatch: "
-                                        f"client={version_str!r} server={_RTVI_PROTOCOL_VERSION!r}"
-                                    ),
-                                    "fatal": True,
-                                },
-                            })
+                            error_frame = json.dumps(
+                                {
+                                    "label": "rtvi-ai",
+                                    "type": "error",
+                                    "id": msg_id,
+                                    "data": {
+                                        "error": (
+                                            f"RTVI major version mismatch: "
+                                            f"client={version_str!r} server={_RTVI_PROTOCOL_VERSION!r}"
+                                        ),
+                                        "fatal": True,
+                                    },
+                                }
+                            )
                             await websocket.send_text(error_frame)
                             await websocket.close()
                             return
                         # Version OK — send bot-ready.
-                        bot_ready = json.dumps({
-                            "label": "rtvi-ai",
-                            "type": "bot-ready",
-                            "id": msg_id,
-                            "data": {
-                                "version": _RTVI_PROTOCOL_VERSION,
-                                "about": {"server": "mod3", "version": "0.5.0"},
-                            },
-                        })
+                        bot_ready = json.dumps(
+                            {
+                                "label": "rtvi-ai",
+                                "type": "bot-ready",
+                                "id": msg_id,
+                                "data": {
+                                    "version": _RTVI_PROTOCOL_VERSION,
+                                    "about": {"server": "mod3", "version": "0.5.0"},
+                                },
+                            }
+                        )
                         await websocket.send_text(bot_ready)
                         logger.debug(
                             "/ws/audio/%s: RTVI handshake complete (client version=%s)",

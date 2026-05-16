@@ -52,12 +52,14 @@ def _isolate_subscribers():
 class TestRtviHandshakeHappyPath:
     def test_client_ready_receives_bot_ready(self, client):
         """A well-formed client-ready should receive a bot-ready reply."""
-        client_ready = json.dumps({
-            "label": "rtvi-ai",
-            "type": "client-ready",
-            "id": "test-handshake-id-001",
-            "data": {"version": "1.3.0", "about": {"library": "pipecat-client-js"}},
-        })
+        client_ready = json.dumps(
+            {
+                "label": "rtvi-ai",
+                "type": "client-ready",
+                "id": "test-handshake-id-001",
+                "data": {"version": "1.3.0", "about": {"library": "pipecat-client-js"}},
+            }
+        )
         with client.websocket_connect("/ws/audio/test-handshake-1") as ws:
             ws.send_text(client_ready)
             reply_text = ws.receive_text()
@@ -72,12 +74,14 @@ class TestRtviHandshakeHappyPath:
 
     def test_bot_ready_has_version_string(self, client):
         """bot-ready data.version must be a non-empty string."""
-        cr = json.dumps({
-            "label": "rtvi-ai",
-            "type": "client-ready",
-            "id": "ver-check-id",
-            "data": {"version": "1.0.0", "about": {"library": "test"}},
-        })
+        cr = json.dumps(
+            {
+                "label": "rtvi-ai",
+                "type": "client-ready",
+                "id": "ver-check-id",
+                "data": {"version": "1.0.0", "about": {"library": "test"}},
+            }
+        )
         with client.websocket_connect("/ws/audio/test-handshake-2") as ws:
             ws.send_text(cr)
             reply = json.loads(ws.receive_text())
@@ -87,12 +91,14 @@ class TestRtviHandshakeHappyPath:
 
     def test_minor_version_variation_accepted(self, client):
         """Major version 1 with a different minor should still handshake successfully."""
-        cr = json.dumps({
-            "label": "rtvi-ai",
-            "type": "client-ready",
-            "id": "minor-ver-id",
-            "data": {"version": "1.99.0", "about": {"library": "test"}},
-        })
+        cr = json.dumps(
+            {
+                "label": "rtvi-ai",
+                "type": "client-ready",
+                "id": "minor-ver-id",
+                "data": {"version": "1.99.0", "about": {"library": "test"}},
+            }
+        )
         with client.websocket_connect("/ws/audio/test-handshake-minor") as ws:
             ws.send_text(cr)
             reply = json.loads(ws.receive_text())
@@ -103,12 +109,14 @@ class TestRtviHandshakeHappyPath:
 class TestRtviHandshakeVersionMismatch:
     def test_major_version_2_sends_error_and_closes(self, client):
         """A client-ready with major version 2 should receive an RTVI error frame."""
-        cr = json.dumps({
-            "label": "rtvi-ai",
-            "type": "client-ready",
-            "id": "mismatch-id-001",
-            "data": {"version": "2.0.0", "about": {"library": "future-client"}},
-        })
+        cr = json.dumps(
+            {
+                "label": "rtvi-ai",
+                "type": "client-ready",
+                "id": "mismatch-id-001",
+                "data": {"version": "2.0.0", "about": {"library": "future-client"}},
+            }
+        )
         frames_received = []
         try:
             with client.websocket_connect("/ws/audio/test-handshake-mismatch") as ws:
@@ -147,12 +155,14 @@ class TestRtviHandshakeTolerance:
 
         subs = get_default_audio_subscribers()
         sid = "test-wrong-type"
-        unexpected = json.dumps({
-            "label": "rtvi-ai",
-            "type": "some-unknown-type",
-            "id": "xyz",
-            "data": {},
-        })
+        unexpected = json.dumps(
+            {
+                "label": "rtvi-ai",
+                "type": "some-unknown-type",
+                "id": "xyz",
+                "data": {},
+            }
+        )
         with client.websocket_connect(f"/ws/audio/{sid}") as ws:
             ws.send_text(unexpected)
             # No crash, connection still open
