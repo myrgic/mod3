@@ -37,26 +37,30 @@ def _make_raw_audio_frame(*, duration_samples: int = 1600, sample_rate: int = 16
     """Build a minimal RTVI raw-audio JSON frame with synthetic int16 PCM."""
     pcm = np.zeros(duration_samples, dtype=np.int16)
     audio_b64 = base64.b64encode(pcm.tobytes()).decode()
-    return json.dumps({
-        "label": "rtvi-ai",
-        "type": "raw-audio",
-        "id": "test-raw-audio-id",
-        "data": {
-            "audio": audio_b64,
-            "sample_rate": sample_rate,
-            "num_channels": 1,
-        },
-    })
+    return json.dumps(
+        {
+            "label": "rtvi-ai",
+            "type": "raw-audio",
+            "id": "test-raw-audio-id",
+            "data": {
+                "audio": audio_b64,
+                "sample_rate": sample_rate,
+                "num_channels": 1,
+            },
+        }
+    )
 
 
 def _make_vad_frame(event_type: str) -> str:
     """Build a user-started/stopped-speaking RTVI frame."""
-    return json.dumps({
-        "label": "rtvi-ai",
-        "type": event_type,
-        "id": f"test-{event_type}-id",
-        "data": {},
-    })
+    return json.dumps(
+        {
+            "label": "rtvi-ai",
+            "type": event_type,
+            "id": f"test-{event_type}-id",
+            "data": {},
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -135,12 +139,14 @@ class TestRawAudioFrame:
         subs = get_default_audio_subscribers()
         sid = "test-empty-audio"
 
-        frame = json.dumps({
-            "label": "rtvi-ai",
-            "type": "raw-audio",
-            "id": "empty-audio-id",
-            "data": {"audio": "", "sample_rate": 16000, "num_channels": 1},
-        })
+        frame = json.dumps(
+            {
+                "label": "rtvi-ai",
+                "type": "raw-audio",
+                "id": "empty-audio-id",
+                "data": {"audio": "", "sample_rate": 16000, "num_channels": 1},
+            }
+        )
 
         with client.websocket_connect(f"/ws/audio/{sid}") as ws:
             ws.send_text(frame)
