@@ -19,11 +19,9 @@ Run with: ``.venv/bin/python -m pytest tests/test_rtvi_integration.py -v``
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import json
 import sys
-import time
 import uuid
 from pathlib import Path
 
