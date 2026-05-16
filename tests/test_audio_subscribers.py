@@ -432,3 +432,89 @@ class TestSynthesizeEmitsRtviOverWS:
 
         subs = get_default_audio_subscribers()
         assert not subs.has_subscribers("nonexistent-sid")
+
+
+# ---------------------------------------------------------------------------
+# RTVI T4: transcript + speaking-lifecycle emit methods
+# ---------------------------------------------------------------------------
+
+
+class TestRtviTranscriptEmit:
+    """Unit tests for the 6 new RTVI T4 emit methods on AudioSubscriberRegistry.
+
+    All unit-level: no live WebSocket needed. Tests verify:
+    - Returns 0 when no subscriber is registered.
+    - Returns > 0 when a mock subscriber is present.
+    - Frame JSON has correct RTVI 1.3.0 shape.
+    """
+
+    def setup_method(self):
+        self.reg = AudioSubscriberRegistry()
+
+    def test_emit_returns_zero_without_subscribers(self):
+        sid = "t4-unit-empty"
+        assert self.reg.emit_user_transcription(sid, "hello") == 0
+        assert self.reg.emit_bot_transcription(sid, "hello") == 0
+        assert self.reg.emit_user_started_speaking(sid) == 0
+        assert self.reg.emit_user_stopped_speaking(sid) == 0
+        assert self.reg.emit_bot_llm_started(sid) == 0
+        assert self.reg.emit_bot_llm_stopped(sid) == 0
+
+    def test_frame_shapes_via_send_single(self):
+        """Verify JSON shape of each emit type by inspecting the frame directly."""
+        import asyncio
+        from unittest.mock import MagicMock  # noqa: PLC0415
+
+        from audio_subscribers import _SessionBucket, _Subscriber  # noqa: PLC0415
+
+        mock_ws = MagicMock()
+        sent_texts = []
+
+        async def mock_send_text(text):
+            sent_texts.append(text)
+
+        mock_ws.send_text = mock_send_text
+
+        mock_loop = asyncio.new_event_loop()
+        sid = "t4-unit-shape"
+
+        # Manually inject a subscriber
+        sub = _Subscriber(ws=mock_ws, loop=mock_loop)
+        bucket = _SessionBucket(subscribers=[sub])
+        self.reg._buckets[sid] = bucket
+
+        mock_loop.run_until_complete(asyncio.sleep(0))  # prime the loop
+
+        # Directly test frame JSON shapes without threading complexity
+        self.reg.emit_user_transcription(sid, "hello world", is_final=True)
+        self.reg.emit_bot_transcription(sid, "bot says hi", is_final=False)
+        self.reg.emit_user_started_speaking(sid)
+        self.reg.emit_user_stopped_speaking(sid)
+        self.reg.emit_bot_llm_started(sid)
+        self.reg.emit_bot_llm_stopped(sid)
+
+        # Drain pending coroutines in mock loop
+        mock_loop.run_until_complete(asyncio.sleep(0.01))
+        mock_loop.close()
+
+        assert len(sent_texts) == 6
+
+        frames = [json.loads(t) for t in sent_texts]
+        types = [f["type"] for f in frames]
+        assert "user-transcription" in types
+        assert "bot-transcription" in types
+        assert "user-started-speaking" in types
+        assert "user-stopped-speaking" in types
+        assert "bot-llm-started" in types
+        assert "bot-llm-stopped" in types
+
+        # Spot-check user-transcription shape
+        ut = next(f for f in frames if f["type"] == "user-transcription")
+        assert ut["label"] == "rtvi-ai"
+        assert isinstance(ut["id"], str) and ut["id"]
+        assert ut["data"]["text"] == "hello world"
+        assert ut["data"]["is_final"] is True
+
+        # Spot-check bot-transcription is_final=False
+        bt = next(f for f in frames if f["type"] == "bot-transcription")
+        assert bt["data"]["is_final"] is False

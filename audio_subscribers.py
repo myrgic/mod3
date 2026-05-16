@@ -203,6 +203,105 @@ class AudioSubscriberRegistry:
         )
         return delivered
 
+    # ------------------------------------------------------------------
+    # RTVI 1.3.0 transcript + speaking-lifecycle emit (T4 / B+ workstream)
+    # ------------------------------------------------------------------
+
+    def emit_user_transcription(self, session_id: str, text: str, *, is_final: bool = True) -> int:
+        """Emit ``user-transcription`` to every subscriber of ``session_id``.
+
+        Duplicates the STT transcript that is also delivered via ACP, so Pipecat
+        web clients receive transcript feedback on the RTVI audio surface.
+        Returns the number of subscribers the frame was delivered to.
+        """
+        frame_id = str(uuid4())
+        is_final_str = "true" if is_final else "false"
+        text_escaped = text.replace('"', '\\"')
+        frame = (
+            f'{{"label":"rtvi-ai","type":"user-transcription","id":"{frame_id}",'
+            f'"data":{{"text":"{text_escaped}","is_final":{is_final_str}}}}}'
+        )
+        return self._emit_single_frame(session_id, frame, label="user-transcription")
+
+    def emit_bot_transcription(self, session_id: str, text: str, *, is_final: bool = True) -> int:
+        """Emit ``bot-transcription`` to every subscriber of ``session_id``.
+
+        Duplicates the bot response text that is also delivered via ACP.
+        Returns the number of subscribers the frame was delivered to.
+        """
+        frame_id = str(uuid4())
+        is_final_str = "true" if is_final else "false"
+        text_escaped = text.replace('"', '\\"')
+        frame = (
+            f'{{"label":"rtvi-ai","type":"bot-transcription","id":"{frame_id}",'
+            f'"data":{{"text":"{text_escaped}","is_final":{is_final_str}}}}}'
+        )
+        return self._emit_single_frame(session_id, frame, label="bot-transcription")
+
+    def emit_user_started_speaking(self, session_id: str) -> int:
+        """Emit ``user-started-speaking`` to every subscriber of ``session_id``.
+
+        Signals VAD onset to Pipecat clients — mirrors the RTVI client-side
+        ``UserStartedSpeakingMessage``.
+        """
+        frame_id = str(uuid4())
+        frame = f'{{"label":"rtvi-ai","type":"user-started-speaking","id":"{frame_id}","data":{{}}}}'
+        return self._emit_single_frame(session_id, frame, label="user-started-speaking")
+
+    def emit_user_stopped_speaking(self, session_id: str) -> int:
+        """Emit ``user-stopped-speaking`` to every subscriber of ``session_id``.
+
+        Signals utterance-boundary to Pipecat clients — mirrors the RTVI
+        client-side ``UserStoppedSpeakingMessage``.
+        """
+        frame_id = str(uuid4())
+        frame = f'{{"label":"rtvi-ai","type":"user-stopped-speaking","id":"{frame_id}","data":{{}}}}'
+        return self._emit_single_frame(session_id, frame, label="user-stopped-speaking")
+
+    def emit_bot_llm_started(self, session_id: str) -> int:
+        """Emit ``bot-llm-started`` to every subscriber of ``session_id``.
+
+        Signals LLM inference start; Pipecat clients may show a thinking indicator.
+        """
+        frame_id = str(uuid4())
+        frame = f'{{"label":"rtvi-ai","type":"bot-llm-started","id":"{frame_id}","data":{{}}}}'
+        return self._emit_single_frame(session_id, frame, label="bot-llm-started")
+
+    def emit_bot_llm_stopped(self, session_id: str) -> int:
+        """Emit ``bot-llm-stopped`` to every subscriber of ``session_id``.
+
+        Signals LLM inference completion; Pipecat clients may hide the indicator.
+        """
+        frame_id = str(uuid4())
+        frame = f'{{"label":"rtvi-ai","type":"bot-llm-stopped","id":"{frame_id}","data":{{}}}}'
+        return self._emit_single_frame(session_id, frame, label="bot-llm-stopped")
+
+    def _emit_single_frame(self, session_id: str, frame: str, *, label: str) -> int:
+        """Shared delivery path for all single-frame emit methods.
+
+        Thread-safe; uses the same RLock + run_coroutine_threadsafe pattern as
+        emit_wav. Returns the delivered subscriber count. Fire-and-forget — callers
+        do not block on socket I/O.
+        """
+        with self._lock:
+            bucket = self._buckets.get(session_id)
+            if not bucket or not bucket.subscribers:
+                return 0
+            targets = list(bucket.subscribers)
+
+        delivered = 0
+        for sub in targets:
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    _send_single_rtvi_frame(sub.ws, frame),
+                    sub.loop,
+                )
+                delivered += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("_emit_single_frame(%s): scheduling failed: %s", label, exc)
+        logger.debug("_emit_single_frame(%s): session=%s delivered=%d", label, session_id, delivered)
+        return delivered
+
 
 def _build_rtvi_frames(*, audio_b64: str, sample_rate: int) -> list[str]:
     """Build the three JSON strings that form one RTVI utterance delivery."""
@@ -231,6 +330,18 @@ async def _send_rtvi_frames(ws: "WebSocket", frames: list[str]) -> None:
             await ws.send_text(frame)
     except Exception as exc:  # noqa: BLE001 — disconnect mid-send is expected
         logger.debug("rtvi frame send failed: %s", exc)
+
+
+async def _send_single_rtvi_frame(ws: "WebSocket", frame: str) -> None:
+    """Send a single RTVI JSON text frame over a WebSocket.
+
+    Used by the T4 transcript and lifecycle emit methods. Same error tolerance
+    as _send_rtvi_frames — a dead socket is silently dropped.
+    """
+    try:
+        await ws.send_text(frame)
+    except Exception as exc:  # noqa: BLE001 — disconnect is expected
+        logger.debug("rtvi single frame send failed: %s", exc)
 
 
 # ---------------------------------------------------------------------------
