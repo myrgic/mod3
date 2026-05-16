@@ -38,46 +38,52 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 def _make_client_ready(version: str = "1.3.0") -> str:
     """Build a client-ready frame as pipecat-client-js would send it."""
-    return json.dumps({
-        "label": "rtvi-ai",
-        "type": "client-ready",
-        "id": str(uuid.uuid4()),
-        "data": {
-            "version": version,
-            "about": {
-                "library": "pipecat-client-js",
-                "library_version": "0.3.0",
-                "platform": "web",
-                "platform_version": "chrome/125",
+    return json.dumps(
+        {
+            "label": "rtvi-ai",
+            "type": "client-ready",
+            "id": str(uuid.uuid4()),
+            "data": {
+                "version": version,
+                "about": {
+                    "library": "pipecat-client-js",
+                    "library_version": "0.3.0",
+                    "platform": "web",
+                    "platform_version": "chrome/125",
+                },
             },
-        },
-    })
+        }
+    )
 
 
 def _make_raw_audio_frame(samples: int = 3200, sample_rate: int = 16000) -> str:
     """Build a raw-audio frame with synthetic int16 PCM silence."""
     pcm = np.zeros(samples, dtype=np.int16)
     audio_b64 = base64.b64encode(pcm.tobytes()).decode()
-    return json.dumps({
-        "label": "rtvi-ai",
-        "type": "raw-audio",
-        "id": str(uuid.uuid4()),
-        "data": {
-            "audio": audio_b64,
-            "sample_rate": sample_rate,
-            "num_channels": 1,
-        },
-    })
+    return json.dumps(
+        {
+            "label": "rtvi-ai",
+            "type": "raw-audio",
+            "id": str(uuid.uuid4()),
+            "data": {
+                "audio": audio_b64,
+                "sample_rate": sample_rate,
+                "num_channels": 1,
+            },
+        }
+    )
 
 
 def _make_disconnect_bot() -> str:
     """Build a disconnect-bot frame."""
-    return json.dumps({
-        "label": "rtvi-ai",
-        "type": "disconnect-bot",
-        "id": str(uuid.uuid4()),
-        "data": {},
-    })
+    return json.dumps(
+        {
+            "label": "rtvi-ai",
+            "type": "disconnect-bot",
+            "id": str(uuid.uuid4()),
+            "data": {},
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
