@@ -383,9 +383,7 @@ class TestDisconnectBot:
 
         with client.websocket_connect(f"/ws/audio/{sid}") as ws:
             assert subs.has_subscribers(sid)
-            ws.send_text(
-                '{"label":"rtvi-ai","type":"disconnect-bot","id":"test-id-1","data":{}}'
-            )
+            ws.send_text('{"label":"rtvi-ai","type":"disconnect-bot","id":"test-id-1","data":{}}')
             # After sending disconnect-bot the server closes; receive() raises or returns close
             try:
                 ws.receive_text()
