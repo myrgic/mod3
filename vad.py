@@ -225,9 +225,7 @@ def _get_pipecat_analyzer():
                     # Fall back to None; callers check is_pipecat_vad_available().
                     import logging as _logging
 
-                    _logging.getLogger("mod3.vad").warning(
-                        "pipecat SileroVADAnalyzer unavailable: %s", exc
-                    )
+                    _logging.getLogger("mod3.vad").warning("pipecat SileroVADAnalyzer unavailable: %s", exc)
     return _pipecat_analyzer
 
 

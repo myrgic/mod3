@@ -15,9 +15,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import logging
-import os
 import sys
-import tomllib
 from pathlib import Path
 
 log = logging.getLogger("fetch_smart_turn_weights")
@@ -34,7 +32,7 @@ def sha256_file(path: Path) -> str:
 def fetch_weight(dest_dir: Path, force: bool = False) -> Path:
     """Download smart-turn-v3.1.onnx to dest_dir; return the local path."""
     try:
-        from huggingface_hub import hf_hub_download, model_info
+        from huggingface_hub import hf_hub_download
     except ImportError:
         log.error("huggingface_hub not installed. Run: pip install huggingface_hub")
         sys.exit(1)
