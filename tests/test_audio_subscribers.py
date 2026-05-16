@@ -463,7 +463,9 @@ class TestRtviTranscriptEmit:
     def test_frame_shapes_via_send_single(self):
         """Verify JSON shape of each emit type by inspecting the frame directly."""
         import asyncio
-        from unittest.mock import AsyncMock, MagicMock
+        from unittest.mock import MagicMock  # noqa: PLC0415
+
+        from audio_subscribers import _SessionBucket, _Subscriber  # noqa: PLC0415
 
         mock_ws = MagicMock()
         sent_texts = []
@@ -477,17 +479,9 @@ class TestRtviTranscriptEmit:
         sid = "t4-unit-shape"
 
         # Manually inject a subscriber
-        from audio_subscribers import _Subscriber, _SessionBucket
         sub = _Subscriber(ws=mock_ws, loop=mock_loop)
         bucket = _SessionBucket(subscribers=[sub])
         self.reg._buckets[sid] = bucket
-
-        # Emit each type and collect frames synchronously
-        futures = []
-
-        def run_and_collect(coro):
-            future = asyncio.run_coroutine_threadsafe(coro, mock_loop)
-            return future
 
         mock_loop.run_until_complete(asyncio.sleep(0))  # prime the loop
 
