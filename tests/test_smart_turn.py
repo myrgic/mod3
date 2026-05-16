@@ -43,7 +43,6 @@ class TestSmartTurnDetectorUnavailable:
     def test_is_available_returns_false_when_weight_absent(self, tmp_path, monkeypatch):
         """is_available() returns False when the ONNX weight file is missing."""
         import vendor.smart_turn.inference as infer_mod
-
         from turn_detector import SmartTurnDetector
 
         monkeypatch.setattr(infer_mod, "ONNX_MODEL_PATH", str(tmp_path / "nonexistent.onnx"))
@@ -54,7 +53,6 @@ class TestSmartTurnDetectorUnavailable:
     def test_predict_returns_skipped_when_unavailable(self, tmp_path, monkeypatch):
         """predict() returns skipped=True and is_complete=True when unavailable."""
         import vendor.smart_turn.inference as infer_mod
-
         from turn_detector import SmartTurnDetector
 
         monkeypatch.setattr(infer_mod, "ONNX_MODEL_PATH", str(tmp_path / "nonexistent.onnx"))
@@ -69,7 +67,6 @@ class TestSmartTurnDetectorUnavailable:
     def test_predict_skips_wrong_sample_rate(self, tmp_path, monkeypatch):
         """predict() returns skipped=True for non-16kHz input."""
         import vendor.smart_turn.inference as infer_mod
-
         from turn_detector import SmartTurnDetector
 
         monkeypatch.setattr(infer_mod, "ONNX_MODEL_PATH", str(tmp_path / "nonexistent.onnx"))
