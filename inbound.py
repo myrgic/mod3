@@ -223,6 +223,15 @@ class InboundPipeline:
                     interrupt_info.reason,
                 )
 
+        # 3c. RTVI T4 — user-started-speaking signal on VAD onset.
+        # TODO(T4): InboundPipeline has no session_id; using "default" fallback.
+        # Wire a real session_id when the pipeline is session-scoped.
+        try:
+            from audio_subscribers import get_default_audio_subscribers as _get_subs
+            _get_subs().emit_user_started_speaking("default")
+        except Exception:
+            pass  # best-effort; never block the VAD path
+
         # 3b. Dispatch a barge-in start event into the registry (if wired),
         # so in-process subscribers and the file mirror see the same signal
         # the legacy /tmp/mod3-barge-in.json watcher produces. Lower latency
@@ -246,6 +255,13 @@ class InboundPipeline:
         if utterance is None:
             return
 
+        # RTVI T4 — user-stopped-speaking at utterance boundary.
+        try:
+            from audio_subscribers import get_default_audio_subscribers as _get_subs
+            _get_subs().emit_user_stopped_speaking("default")
+        except Exception:
+            pass  # best-effort
+
         # 5. Send complete utterance through the bus pipeline (Gate → Whisper → BoH)
         audio_bytes = utterance.astype(np.float32).tobytes()
         event = self._bus.perceive(
@@ -262,6 +278,13 @@ class InboundPipeline:
         # 6. Emit channel notification to Claude Code
         logger.info("transcript: %s (confidence=%.2f)", event.content[:80], event.confidence)
         self._emit_notification(event, final_vad)
+
+        # RTVI T4 — user-transcription on successful STT result.
+        try:
+            from audio_subscribers import get_default_audio_subscribers as _get_subs
+            _get_subs().emit_user_transcription("default", event.content, is_final=True)
+        except Exception:
+            pass  # best-effort; ACP delivery above is the primary path
 
     # ------------------------------------------------------------------
     # Speech accumulation

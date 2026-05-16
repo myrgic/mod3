@@ -222,6 +222,13 @@ class AgentLoop:
         # "_mod3_trace_id"). This correlates the mod3 chat.phase.provider_call
         # event with the kernel's bus_traces kernel.chat.subspan.v1 events that
         # share the same W3C trace_id injected via the traceparent header.
+        # RTVI T4 — bot-llm-started before inference begins.
+        try:
+            from audio_subscribers import get_default_audio_subscribers as _get_rtvi_subs
+            _get_rtvi_subs().emit_bot_llm_started(self.channel_id)
+        except Exception:
+            pass  # best-effort; never block inference
+
         t_provider_start = time.perf_counter()
         response = await self.provider.chat(
             messages=self.conversation,
@@ -229,6 +236,13 @@ class AgentLoop:
             system=system_prompt,
         )
         _provider_call_ms = int((time.perf_counter() - t_provider_start) * 1000)
+
+        # RTVI T4 — bot-llm-stopped after inference returns.
+        try:
+            from audio_subscribers import get_default_audio_subscribers as _get_rtvi_subs
+            _get_rtvi_subs().emit_bot_llm_stopped(self.channel_id)
+        except Exception:
+            pass  # best-effort
         t_llm = float(_provider_call_ms)
         # Extract the trace_id set by CogOSProvider — propagate to ALL phase
         # events in this turn so the trace panel can correlate them with the
@@ -378,6 +392,13 @@ class AgentLoop:
                     "content": assistant_text,
                 }
             )
+
+            # RTVI T4 — bot-transcription after response is complete.
+            try:
+                from audio_subscribers import get_default_audio_subscribers as _get_rtvi_subs
+                _get_rtvi_subs().emit_bot_transcription(self.channel_id, assistant_text, is_final=True)
+            except Exception:
+                pass  # best-effort; ACP and channel delivery above are the primary paths
 
             # Log exchange to CogOS bus (observation channel — Claude can see this)
             _log_exchange_to_bus(event.content, assistant_text, self.provider.name)
