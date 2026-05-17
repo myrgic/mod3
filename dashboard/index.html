@@ -1952,8 +1952,75 @@ function finalizeAssistant(suffix) {
   _currentAssistantText = '';
 }
 
+/**
+ * Parse an optional @<session_id> mention prefix from a message.
+ *
+ * If the text starts with "@" followed by a non-whitespace token and a space
+ * (or the token is the entire message), returns:
+ *   { targetSessionId: "<token>", body: "<remainder>" }
+ * Otherwise returns { targetSessionId: null, body: text }.
+ *
+ * Examples:
+ *   "@main hello" → { targetSessionId: "main", body: "hello" }
+ *   "@claude-ea396425 ping" → { targetSessionId: "claude-ea396425", body: "ping" }
+ *   "hello world"  → { targetSessionId: null, body: "hello world" }
+ */
+function parseMentionAddress(text) {
+  const m = text.match(/^@(\S+)(?:\s+(.*))?$/s);
+  if (!m) return { targetSessionId: null, body: text };
+  return { targetSessionId: m[1], body: (m[2] || '').trim() || text };
+}
+
+/**
+ * Forward a user message to all attached channel-client seats (MCP harnesses).
+ *
+ * Calls POST /v1/sessions/broadcast-message which fans the event through the
+ * seat registry to every registered channel-client seat.  Each seat's SSE
+ * stream delivers the event, and the channel_client process forwards it as a
+ * notifications/claude/channel MCP notification to its host Claude Code
+ * process.
+ *
+ * If targetSessionId is provided, only that session's seats receive the event.
+ * Returns the number of seats notified, or 0 on failure.
+ */
+async function broadcastToChannelSeats(text, targetSessionId) {
+  const body = { content: text, input_type: 'text', role: 'user' };
+  if (targetSessionId) body.target_session_id = targetSessionId;
+  try {
+    const r = await fetch('/v1/sessions/broadcast-message', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) {
+      console.warn('[channel] broadcast-message failed:', r.status);
+      return 0;
+    }
+    const data = await r.json();
+    console.log('[channel] broadcast-message:', data);
+    return data.seats_notified || 0;
+  } catch (err) {
+    console.warn('[channel] broadcast-message error:', err);
+    return 0;
+  }
+}
+
 async function sendTextMessage(text) {
   appendMessage('user', text, 'text');
+
+  // Parse optional @<session_id> mention address.
+  // When present, the message is routed only to the addressed session's seats
+  // and the local AgentLoop is skipped (the addressed harness handles it).
+  const { targetSessionId, body: messageBody } = parseMentionAddress(text);
+
+  // Always broadcast to channel-client seats (MCP harnesses).  This closes
+  // the dashboard→Claude-Code receive direction: the seat SSE stream delivers
+  // the event to channel_client.py which emits it as notifications/claude/channel.
+  broadcastToChannelSeats(messageBody, targetSessionId);
+
+  // When the message is @-addressed to a specific harness, skip the local
+  // AgentLoop — the addressed Claude Code session owns the response.
+  if (targetSessionId) return;
 
   // Transport selection: URL param wins, else localStorage (mod3.transport), else /ws/chat.
   // getTransportPref() is defined in the settings block above.

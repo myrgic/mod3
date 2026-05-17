@@ -17,7 +17,8 @@ Endpoints:
   DELETE /v1/sessions/{id}/seats/{seat_id} — revoke a seat
   GET  /v1/sessions/{id}/seats/{seat_id}/events — SSE event stream for a seat
   GET  /v1/sessions/{id}/seats             — list seats in a session
-  POST /v1/sessions/{id}/messages          — fan dashboard text to all seats
+  POST /v1/sessions/{id}/messages          — fan dashboard text to all seats in session
+  POST /v1/sessions/broadcast-message     — fan dashboard text to ALL seats (all sessions)
   POST /v1/dashboard-chat                  — REST dashboard-chat (for channel clients)
   GET  /v1/logs/chat-flow                  — recent chat-flow events (JSON)
   GET  /v1/logs/chat-flow/stream           — live SSE stream of chat-flow events
@@ -1332,6 +1333,98 @@ async def session_message(session_id: str, request: Request):
         pass
 
     return {"status": "ok", "session_id": session_id, "seats_notified": count}
+
+
+@app.post("/v1/sessions/broadcast-message")
+async def broadcast_message(request: Request):
+    """Fan a dashboard text message to ALL channel-client seats across all sessions.
+
+    This is the dashboard→MCP-harness receive path.  When the operator types
+    in the dashboard chat input, the message needs to reach every attached
+    Claude Code channel-client seat so each seat can forward it as a
+    ``notifications/claude/channel`` MCP notification to its host process.
+
+    Body (JSON):
+      {
+        "content": "<text>",
+        "input_type": "text" | "voice",
+        "role": "user"
+      }
+
+    Optional @-mention addressing:
+      {
+        "content": "@<session_id> hello",
+        "target_session_id": "<session_id>"   -- explicit target, skips fan_out_all
+      }
+
+    Returns:
+      {"status": "ok", "seats_notified": <int>, "target": "all" | "<session_id>"}
+    """
+    from seats import get_seat_registry
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "invalid JSON"})
+
+    content = body.get("content", "")
+    input_type = body.get("input_type", "text")
+    role = body.get("role", "user")
+    target_session_id = body.get("target_session_id") or None
+
+    if not content:
+        return JSONResponse(status_code=400, content={"error": "content is required"})
+
+    msg_id = str(uuid.uuid4())[:8]
+    registry = get_seat_registry()
+
+    event = {
+        "type": "user_message",
+        "content": content,
+        "input_type": input_type,
+        "role": role,
+    }
+
+    if target_session_id:
+        # Addressed message — fan only to the target session's seats.
+        count = registry.fan_out(target_session_id, event)
+        target_label = target_session_id
+        try:
+            get_chat_flow_log().emit(
+                CHAT_MESSAGE_RECEIVED,
+                target_session_id,
+                msg_id,
+                "http-broadcast",
+                [],
+                content,
+                "inbound",
+            )
+        except Exception:  # noqa: BLE001
+            pass
+    else:
+        # Broadcast to all sessions.
+        count = registry.fan_out_all(event)
+        target_label = "all"
+        try:
+            get_chat_flow_log().emit(
+                CHAT_MESSAGE_RECEIVED,
+                "broadcast",
+                msg_id,
+                "http-broadcast",
+                [],
+                content,
+                "inbound",
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+    logger.debug(
+        "broadcast-message: target=%s seats_notified=%d content=%r",
+        target_label,
+        count,
+        content[:80],
+    )
+    return {"status": "ok", "seats_notified": count, "target": target_label}
 
 
 @app.post("/v1/dashboard-chat")
