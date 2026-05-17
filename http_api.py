@@ -58,6 +58,7 @@ from modules.text import TextModule
 from modules.voice import VoiceModule
 from schemas.http import (
     BusActRequest,
+    ComposeProfileRequest,
     RegisterProfileRequest,
     SessionRegisterRequest,
     ShutdownRequest,
@@ -810,6 +811,120 @@ def register_profile(req: RegisterProfileRequest):
         raise HTTPException(status_code=400, detail=msg) from exc
 
     return profile.to_json()
+
+
+def _load_wav_24k_mono(path: str):
+    """Read a 24 kHz, 16-bit PCM WAV (mono or stereo) into an int16 numpy array.
+
+    Stereo inputs are downmixed to mono. Any other sample rate, sample width,
+    or channel count raises ValueError with a human-readable message.
+    """
+    import wave
+
+    import numpy as np
+
+    with wave.open(path, "rb") as wf:
+        sr = wf.getframerate()
+        if sr != 24000:
+            raise ValueError(f"{path}: sample rate must be 24000 Hz, got {sr} Hz")
+        sw = wf.getsampwidth()
+        if sw != 2:
+            raise ValueError(f"{path}: sample width must be 16-bit, got {sw * 8}-bit")
+        nch = wf.getnchannels()
+        if nch not in (1, 2):
+            raise ValueError(f"{path}: must be mono or stereo, got {nch} channels")
+        frames = wf.readframes(wf.getnframes())
+
+    arr = np.frombuffer(frames, dtype=np.int16)
+    if nch == 2:
+        arr = arr.reshape(-1, 2).mean(axis=1).astype(np.int16)
+    return arr
+
+
+def _write_wav_24k_mono(path: str, samples) -> None:
+    """Write a numpy int16 array as a 24 kHz mono 16-bit PCM WAV."""
+    import wave
+
+    import numpy as np
+
+    samples = np.ascontiguousarray(samples, dtype=np.int16)
+    with wave.open(path, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(24000)
+        wf.writeframes(samples.tobytes())
+
+
+@app.post("/v1/voices/profiles/compose")
+def compose_profile(req: ComposeProfileRequest):
+    """Concatenate multiple reference clips into one and register as a profile.
+
+    Each segment must be a 16-bit PCM WAV at 24 kHz. Stereo files are
+    downmixed; other sample rates or bit depths are rejected with 400.
+    Segments are joined in the given order with `gap_sec` seconds of silence
+    between consecutive entries. The combined WAV is written to
+    ``~/.mod3/voices/sources/<name>.wav`` and then registered through the
+    same path used by POST /v1/voices/profiles.
+
+    Returns the registered profile as JSON (200), or:
+      400 — empty segment_paths, engine doesn't support cloning, or any
+            segment fails WAV validation
+      404 — any segment path does not exist
+      409 — a profile with that name already exists
+    """
+    import pathlib
+
+    import numpy as np
+    from fastapi import HTTPException
+
+    if not req.segment_paths:
+        raise HTTPException(status_code=400, detail="segment_paths must include at least one entry")
+
+    engine_cfg = MODELS.get(req.engine)
+    if engine_cfg is None or not engine_cfg.get("supports_cloning"):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"engine {req.engine!r} does not support voice cloning; "
+                f"supported engines: {[k for k, v in MODELS.items() if v.get('supports_cloning')]}"
+            ),
+        )
+
+    if _registry.get(req.name) is not None:
+        raise HTTPException(status_code=409, detail=f"profile {req.name!r} already exists")
+
+    paths = [pathlib.Path(p).expanduser() for p in req.segment_paths]
+    for p in paths:
+        if not p.exists():
+            raise HTTPException(status_code=404, detail=f"segment not found: {p}")
+
+    try:
+        chunks = [_load_wav_24k_mono(str(p)) for p in paths]
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    gap = np.zeros(int(req.gap_sec * 24000), dtype=np.int16)
+    parts: list = []
+    for i, chunk in enumerate(chunks):
+        if i:
+            parts.append(gap)
+        parts.append(chunk)
+    combined = np.concatenate(parts)
+
+    sources_dir = pathlib.Path.home() / ".mod3" / "voices" / "sources"
+    sources_dir.mkdir(parents=True, exist_ok=True)
+    out_path = sources_dir / f"{req.name}.wav"
+    _write_wav_24k_mono(str(out_path), combined)
+
+    return register_profile(
+        RegisterProfileRequest(
+            name=req.name,
+            engine=req.engine,
+            ref_audio_path=str(out_path),
+            ref_text=req.ref_text,
+            exaggeration=req.exaggeration,
+        )
+    )
 
 
 @app.get("/v1/voices/profiles")

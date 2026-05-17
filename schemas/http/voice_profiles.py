@@ -19,6 +19,22 @@ class RegisterProfileRequest(_Base):
     exaggeration: float = Field(default=0.5)
 
 
+class ComposeProfileRequest(_Base):
+    """POST /v1/voices/profiles/compose — concatenate clips and register.
+
+    Each segment must be a 16-bit WAV at 24 kHz (mono or stereo). Stereo
+    sources are downmixed to mono. Segments are joined in the given order
+    with `gap_sec` seconds of silence between consecutive entries.
+    """
+
+    name: str
+    engine: str
+    segment_paths: list[str]
+    gap_sec: float = Field(default=0.15, ge=0.0, le=2.0)
+    exaggeration: float = Field(default=0.5)
+    ref_text: str | None = Field(default=None)
+
+
 class VoiceProfilesResponse(_Base):
     """GET /v1/voices/profiles response."""
 
@@ -31,4 +47,9 @@ class DeleteProfileResponse(_Base):
     deleted: bool
 
 
-__all__ = ["DeleteProfileResponse", "RegisterProfileRequest", "VoiceProfilesResponse"]
+__all__ = [
+    "ComposeProfileRequest",
+    "DeleteProfileResponse",
+    "RegisterProfileRequest",
+    "VoiceProfilesResponse",
+]
