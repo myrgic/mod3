@@ -21,8 +21,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from seats import Seat, SeatRegistry  # noqa: E402
-
+from seats import Seat  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Helpers
