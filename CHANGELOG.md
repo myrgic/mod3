@@ -2,7 +2,26 @@
 
 ## Unreleased
 
-_(no entries — see [0.5.0] below)_
+_(no entries — see [0.6.0] below)_
+
+## [0.6.0] - 2026-05-16
+
+### Added — RTVI 1.3.0 audio-plane compatibility
+
+- **`rtvi-client` seat type** — `VALID_CLIENT_TYPES` extended to accept RTVI 1.3.0 clients. (#75)
+- **`/ws/audio/{session_id}` client-ready/bot-ready handshake** — RTVI protocol negotiation on WebSocket connect. (#77)
+- **Raw-audio inbound routing** — `client-audio` frames routed to VAD/STT pipeline. (#80)
+- **RTVI transcript and speaking-lifecycle emission** — `bot-speaking`, `bot-stopped-speaking`, and `transcript` server events emitted on the audio plane. (#78)
+- **`disconnect-bot` graceful close** — server-side teardown on client disconnect-bot message. (#76)
+- **Full-session RTVI 1.3.0 integration test** — T1–T6 coverage for the audio WebSocket path. (#81)
+- **G2 executed decision record** — RTVI 1.3.0 B+ selected over LIVEKIT/Pipecat-native alternatives. (#79)
+
+### Added — Smart Turn v3 end-of-utterance detection
+
+- **Smart Turn ONNX v3.2-cpu vendor** — replaces v1 model; CoreML execution provider wired for both ONNX sessions on Apple Silicon. (#74)
+- **Smart Turn v3 integration** — end-of-utterance detector replaces legacy silence-threshold heuristic. (#73)
+- **`voice_confidence` wrapper** — shared confidence accessor for VAD and RTVI; decision doc + weight fetch (F2, F4). (#72)
+- **Rung-1 Silero VAD + Smart Turn vendor scaffold + RTVI scoping doc** (F1, F3, G1). (#71)
 
 ## [0.5.0] - 2026-05-15
 
