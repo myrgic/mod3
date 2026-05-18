@@ -16,6 +16,13 @@ for forward-compatibility with fields added by future kernel versions.
 """
 
 from .bus import BusActRequest, BusActResponse, BusPerceiveResponse
+from .compositions import (
+    CompositionCreateRequest,
+    CompositionListResponse,
+    CompositionResponse,
+    CompositionUpdateRequest,
+    SegmentSpec,
+)
 from .health import (
     HealthResponse,
     ShutdownRequest,
@@ -28,7 +35,12 @@ from .jobs import JobListResponse
 from .sessions import SessionListResponse, SessionRegisterRequest, SessionSubscribersResponse
 from .synthesize import SpeakRequest, SpeechRequest, SynthesizeRequest
 from .vad_filter import VadCheckResponse
-from .voice_profiles import DeleteProfileResponse, RegisterProfileRequest, VoiceProfilesResponse
+from .voice_profiles import (
+    ComposeProfileRequest,
+    DeleteProfileResponse,
+    RegisterProfileRequest,
+    VoiceProfilesResponse,
+)
 from .voices import EngineInfo, VoicesResponse
 
 __all__ = [
@@ -40,9 +52,16 @@ __all__ = [
     "EngineInfo",
     "VoicesResponse",
     # voice_profiles
+    "ComposeProfileRequest",
     "DeleteProfileResponse",
     "RegisterProfileRequest",
     "VoiceProfilesResponse",
+    # compositions
+    "CompositionCreateRequest",
+    "CompositionListResponse",
+    "CompositionResponse",
+    "CompositionUpdateRequest",
+    "SegmentSpec",
     # sessions
     "SessionListResponse",
     "SessionRegisterRequest",

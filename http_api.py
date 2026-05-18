@@ -59,6 +59,9 @@ from modules.text import TextModule
 from modules.voice import VoiceModule
 from schemas.http import (
     BusActRequest,
+    ComposeProfileRequest,
+    CompositionCreateRequest,
+    CompositionUpdateRequest,
     RegisterProfileRequest,
     SessionRegisterRequest,
     ShutdownRequest,
@@ -82,6 +85,11 @@ _shutting_down = False
 
 # Voice profile registry — mkdir only; no IO on import.
 _registry = VoiceProfileRegistry()
+
+# Composition (draft) registry — mkdir only; no IO on import.
+from compositions import Composition, CompositionRegistry, Segment  # noqa: E402
+
+_compositions = CompositionRegistry()
 
 
 @asynccontextmanager
@@ -813,6 +821,120 @@ def register_profile(req: RegisterProfileRequest):
     return profile.to_json()
 
 
+def _load_wav_24k_mono(path: str):
+    """Read a 24 kHz, 16-bit PCM WAV (mono or stereo) into an int16 numpy array.
+
+    Stereo inputs are downmixed to mono. Any other sample rate, sample width,
+    or channel count raises ValueError with a human-readable message.
+    """
+    import wave
+
+    import numpy as np
+
+    with wave.open(path, "rb") as wf:
+        sr = wf.getframerate()
+        if sr != 24000:
+            raise ValueError(f"{path}: sample rate must be 24000 Hz, got {sr} Hz")
+        sw = wf.getsampwidth()
+        if sw != 2:
+            raise ValueError(f"{path}: sample width must be 16-bit, got {sw * 8}-bit")
+        nch = wf.getnchannels()
+        if nch not in (1, 2):
+            raise ValueError(f"{path}: must be mono or stereo, got {nch} channels")
+        frames = wf.readframes(wf.getnframes())
+
+    arr = np.frombuffer(frames, dtype=np.int16)
+    if nch == 2:
+        arr = arr.reshape(-1, 2).mean(axis=1).astype(np.int16)
+    return arr
+
+
+def _write_wav_24k_mono(path: str, samples) -> None:
+    """Write a numpy int16 array as a 24 kHz mono 16-bit PCM WAV."""
+    import wave
+
+    import numpy as np
+
+    samples = np.ascontiguousarray(samples, dtype=np.int16)
+    with wave.open(path, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(24000)
+        wf.writeframes(samples.tobytes())
+
+
+@app.post("/v1/voices/profiles/compose")
+def compose_profile(req: ComposeProfileRequest):
+    """Concatenate multiple reference clips into one and register as a profile.
+
+    Each segment must be a 16-bit PCM WAV at 24 kHz. Stereo files are
+    downmixed; other sample rates or bit depths are rejected with 400.
+    Segments are joined in the given order with `gap_sec` seconds of silence
+    between consecutive entries. The combined WAV is written to
+    ``~/.mod3/voices/sources/<name>.wav`` and then registered through the
+    same path used by POST /v1/voices/profiles.
+
+    Returns the registered profile as JSON (200), or:
+      400 — empty segment_paths, engine doesn't support cloning, or any
+            segment fails WAV validation
+      404 — any segment path does not exist
+      409 — a profile with that name already exists
+    """
+    import pathlib
+
+    import numpy as np
+    from fastapi import HTTPException
+
+    if not req.segment_paths:
+        raise HTTPException(status_code=400, detail="segment_paths must include at least one entry")
+
+    engine_cfg = MODELS.get(req.engine)
+    if engine_cfg is None or not engine_cfg.get("supports_cloning"):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"engine {req.engine!r} does not support voice cloning; "
+                f"supported engines: {[k for k, v in MODELS.items() if v.get('supports_cloning')]}"
+            ),
+        )
+
+    if _registry.get(req.name) is not None:
+        raise HTTPException(status_code=409, detail=f"profile {req.name!r} already exists")
+
+    paths = [pathlib.Path(p).expanduser() for p in req.segment_paths]
+    for p in paths:
+        if not p.exists():
+            raise HTTPException(status_code=404, detail=f"segment not found: {p}")
+
+    try:
+        chunks = [_load_wav_24k_mono(str(p)) for p in paths]
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    gap = np.zeros(int(req.gap_sec * 24000), dtype=np.int16)
+    parts: list = []
+    for i, chunk in enumerate(chunks):
+        if i:
+            parts.append(gap)
+        parts.append(chunk)
+    combined = np.concatenate(parts)
+
+    sources_dir = pathlib.Path.home() / ".mod3" / "voices" / "sources"
+    sources_dir.mkdir(parents=True, exist_ok=True)
+    out_path = sources_dir / f"{req.name}.wav"
+    _write_wav_24k_mono(str(out_path), combined)
+
+    return register_profile(
+        RegisterProfileRequest(
+            name=req.name,
+            engine=req.engine,
+            ref_audio_path=str(out_path),
+            ref_text=req.ref_text,
+            exaggeration=req.exaggeration,
+        )
+    )
+
+
 @app.get("/v1/voices/profiles")
 def list_profiles(
     request: Request,
@@ -945,6 +1067,136 @@ def delete_profile(name: str):
             content={"deleted": False, "error": "not found"},
         )
     return {"deleted": True}
+
+
+# ---------------------------------------------------------------------------
+# Compositions — voice-lab iteration unit (draft of a profile)
+# ---------------------------------------------------------------------------
+
+
+def _composition_to_dict(c: Composition) -> dict:
+    return c.to_json()
+
+
+def _segments_from_request(specs) -> list[Segment]:
+    return [Segment(path=s.path, label=s.label, duration_sec=s.duration_sec) for s in specs]
+
+
+@app.get("/v1/voices/compositions")
+def list_compositions():
+    """List all saved composition drafts."""
+    return {"compositions": [_composition_to_dict(c) for c in _compositions.list()]}
+
+
+@app.post("/v1/voices/compositions")
+def create_composition(req: CompositionCreateRequest):
+    """Create a new composition draft. Returns 409 if `name` is taken."""
+    from fastapi import HTTPException
+
+    try:
+        comp = Composition(
+            name=req.name,
+            segments=_segments_from_request(req.segments),
+            engine=req.engine,
+            exaggeration=req.exaggeration,
+            gap_sec=req.gap_sec,
+            notes=req.notes,
+        )
+        created = _compositions.create(comp)
+    except ValueError as exc:
+        msg = str(exc)
+        status = 409 if "already exists" in msg else 400
+        raise HTTPException(status_code=status, detail=msg) from exc
+    return _composition_to_dict(created)
+
+
+@app.get("/v1/voices/compositions/{name}")
+def get_composition(name: str):
+    from fastapi import HTTPException
+
+    comp = _compositions.get(name)
+    if comp is None:
+        raise HTTPException(status_code=404, detail=f"composition {name!r} not found")
+    return _composition_to_dict(comp)
+
+
+@app.patch("/v1/voices/compositions/{name}")
+def update_composition(name: str, req: CompositionUpdateRequest):
+    from fastapi import HTTPException
+
+    patch = req.model_dump(exclude_none=True)
+    if "segments" in patch:
+        patch["segments"] = [
+            {"path": s["path"], "label": s.get("label", ""), "duration_sec": s.get("duration_sec")}
+            for s in patch["segments"]
+        ]
+    try:
+        updated = _compositions.update(name, patch)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"composition {name!r} not found") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _composition_to_dict(updated)
+
+
+@app.delete("/v1/voices/compositions/{name}")
+def delete_composition(name: str):
+    if not _compositions.delete(name):
+        return JSONResponse(status_code=404, content={"deleted": False, "error": "not found"})
+    return {"deleted": True}
+
+
+@app.post("/v1/voices/compositions/{name}/register")
+def register_composition(name: str, profile_name: str | None = None):
+    """Synthesize a profile from a saved composition.
+
+    Routes to POST /v1/voices/profiles/compose with the composition's segments
+    + settings. `profile_name` query param overrides the composition's `name`
+    for the resulting profile (useful for A/B-ing the same draft).
+    """
+    from fastapi import HTTPException
+
+    comp = _compositions.get(name)
+    if comp is None:
+        raise HTTPException(status_code=404, detail=f"composition {name!r} not found")
+    return compose_profile(
+        ComposeProfileRequest(
+            name=profile_name or comp.name,
+            engine=comp.engine,
+            segment_paths=[s.path for s in comp.segments],
+            gap_sec=comp.gap_sec,
+            exaggeration=comp.exaggeration,
+        )
+    )
+
+
+@app.get("/v1/voices/segments")
+def get_segment_audio(path: str):
+    """Serve a segment WAV for inline preview in the voice lab.
+
+    Path must point to an existing 16-bit PCM WAV under one of:
+      - ~/.mod3/
+      - ~/.claude/jobs/
+      - /tmp/voice_lab/
+      - $TMPDIR / /tmp segment subtrees
+    Anything else is rejected with 403.
+    """
+    import pathlib
+
+    from fastapi import HTTPException
+    from fastapi.responses import FileResponse
+
+    target = pathlib.Path(path).expanduser().resolve()
+    allowed_roots = [
+        (pathlib.Path.home() / ".mod3").resolve(),
+        (pathlib.Path.home() / ".claude" / "jobs").resolve(),
+        pathlib.Path("/tmp/voice_lab").resolve(),
+    ]
+    if not any(target.is_relative_to(root) for root in allowed_roots):
+        raise HTTPException(status_code=403, detail="path is not within an allowed segment root")
+    if not target.exists() or target.suffix.lower() != ".wav":
+        raise HTTPException(status_code=404, detail="segment WAV not found")
+    return FileResponse(str(target), media_type="audio/wav")
 
 
 @app.post("/v1/stop")
