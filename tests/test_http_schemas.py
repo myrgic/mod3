@@ -151,6 +151,41 @@ class TestSessionRegisterRequest:
         req = SessionRegisterRequest(session_id="s1", participant_id="cog", participant_type="user")
         assert req.participant_type == "user"
 
+    # Wave 6b: identity claims (iss/sub) — backward compatible
+    def test_identity_claims_default_none(self):
+        """Pre-Wave-6b callers that don't pass iss/sub get None — backward compat."""
+        req = SessionRegisterRequest(session_id="s1", participant_id="cog")
+        assert req.iss is None
+        assert req.sub is None
+
+    def test_identity_claims_present(self):
+        req = SessionRegisterRequest(
+            session_id="s1",
+            participant_id="cog",
+            iss="cogos-dev",
+            sub="cog",
+        )
+        assert req.iss == "cogos-dev"
+        assert req.sub == "cog"
+
+    def test_identity_claims_in_json(self):
+        req = SessionRegisterRequest(
+            session_id="s1",
+            participant_id="cog",
+            iss="cogos-dev",
+            sub="cog",
+        )
+        import json
+        d = json.loads(req.model_dump_json())
+        assert d["iss"] == "cogos-dev"
+        assert d["sub"] == "cog"
+
+    def test_partial_identity_claims(self):
+        """sub without iss is valid (sub-only unattributed pattern)."""
+        req = SessionRegisterRequest(session_id="s1", participant_id="cog", sub="cog")
+        assert req.iss is None
+        assert req.sub == "cog"
+
 
 class TestSessionSubscribersResponse:
     def test_subscribed(self):

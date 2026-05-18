@@ -50,19 +50,30 @@ class Seat:
     client_type: str
     device_uuid: str
     created_at: float = field(default_factory=time.time)
+    # Identity claims (Wave 6b) — OIDC iss/sub for the principal holding this seat.
+    # None means unattributed (pre-Wave-6b callers; backward compatible).
+    iss: str | None = None
+    sub: str | None = None
     # SSE event queue — one entry per pending event
     queue: asyncio.Queue = field(default_factory=asyncio.Queue)
     # asyncio loop that owns this seat's queue
     loop: asyncio.AbstractEventLoop | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d: dict[str, Any] = {
             "seat_id": self.seat_id,
             "session_id": self.session_id,
             "client_type": self.client_type,
             "device_uuid": self.device_uuid,
             "created_at": self.created_at,
         }
+        # Include identity claims only when present so the response is
+        # backward-compatible with callers that don't expect these fields.
+        if self.iss is not None:
+            d["iss"] = self.iss
+        if self.sub is not None:
+            d["sub"] = self.sub
+        return d
 
 
 # ---------------------------------------------------------------------------
@@ -87,8 +98,18 @@ class SeatRegistry:
         session_id: str,
         client_type: str,
         device_uuid: str,
+        iss: str | None = None,
+        sub: str | None = None,
     ) -> Seat:
-        """Create a new seat in *session_id*.  Auto-creates the session bucket."""
+        """Create a new seat in *session_id*.  Auto-creates the session bucket.
+
+        Args:
+            session_id: Target session (auto-created if absent).
+            client_type: One of VALID_CLIENT_TYPES; falls back to "generic".
+            device_uuid: Persistent client-side UUID.
+            iss: Optional OIDC issuer for the identity holding this seat.
+            sub: Optional OIDC subject slug (e.g. "cog", "chaz").
+        """
         if client_type not in VALID_CLIENT_TYPES:
             client_type = "generic"
         seat_id = str(uuid.uuid4())
@@ -97,12 +118,18 @@ class SeatRegistry:
             session_id=session_id,
             client_type=client_type,
             device_uuid=device_uuid,
+            iss=iss,
+            sub=sub,
         )
         with self._lock:
             if session_id not in self._seats:
                 self._seats[session_id] = {}
             self._seats[session_id][seat_id] = seat
-        logger.info("Seat %s registered in session %s (client=%s)", seat_id, session_id, client_type)
+        identity_info = f" iss={iss!r} sub={sub!r}" if iss or sub else ""
+        logger.info(
+            "Seat %s registered in session %s (client=%s%s)",
+            seat_id, session_id, client_type, identity_info,
+        )
         return seat
 
     def get(self, session_id: str, seat_id: str) -> Seat | None:

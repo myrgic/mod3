@@ -12,7 +12,23 @@ class _Base(BaseModel):
 
 
 class SessionRegisterRequest(_Base):
-    """POST /v1/sessions/register — register a session with the Mod3 communication bus."""
+    """POST /v1/sessions/register — register a session with the Mod3 communication bus.
+
+    Identity claims (Wave 6b / ADR-082):
+        iss: OIDC issuer for the principal registering this session.
+             Typically the CogOS kernel issuer (e.g. "cogos-dev").
+        sub: OIDC subject — the stable identity slug (e.g. "chaz", "cog").
+
+        Both fields are optional. When absent, the seat is treated as an
+        unattributed seat (backward-compatible with pre-Wave-6b callers).
+        When present, mod3 emits a ``presence.started`` event so the kernel
+        reconciler can update the seat's identity binding.
+
+        Agentic sessions (Claude Code, Cursor) bind two identities simultaneously:
+            participant_id  → user identity (human operator)
+            iss + sub       → agent identity (LLM-shaped substrate entity)
+        This is the multi-identity harness shape per feedback_agentic_harness_multi_identity.
+    """
 
     session_id: str
     participant_id: str
@@ -20,6 +36,9 @@ class SessionRegisterRequest(_Base):
     preferred_voice: str | None = Field(default=None)
     preferred_output_device: str = Field(default="system-default")
     priority: int = Field(default=0)
+    # Identity claims (Wave 6b) — optional, backward compatible
+    iss: str | None = Field(default=None, description="OIDC issuer for the registering identity")
+    sub: str | None = Field(default=None, description="OIDC subject slug (e.g. 'cog', 'chaz')")
 
 
 class SessionSubscribersResponse(_Base):
