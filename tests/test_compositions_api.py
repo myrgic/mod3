@@ -8,7 +8,6 @@ profile. The segment-audio endpoint's path-allowlist behavior is also covered.
 import os
 import sys
 import wave
-from pathlib import Path
 
 import numpy as np
 import pytest
