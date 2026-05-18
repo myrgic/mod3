@@ -59,9 +59,7 @@ def client(monkeypatch, tmp_path):
     from voice_profiles import VoiceProfileRegistry
 
     monkeypatch.setattr(http_api, "_registry", VoiceProfileRegistry(root=tmp_path / "voices"))
-    monkeypatch.setattr(
-        http_api, "_compositions", CompositionRegistry(root=tmp_path / "compositions")
-    )
+    monkeypatch.setattr(http_api, "_compositions", CompositionRegistry(root=tmp_path / "compositions"))
 
     import engine as _engine_mod
 

@@ -79,9 +79,7 @@ class CompositionRegistry:
 
     def _path(self, name: str) -> pathlib.Path:
         if not _NAME_RE.match(name):
-            raise ValueError(
-                f"composition name must match [A-Za-z0-9_-]+; got {name!r}"
-            )
+            raise ValueError(f"composition name must match [A-Za-z0-9_-]+; got {name!r}")
         return self._root / f"{name}.json"
 
     def _lock(self, name: str) -> threading.Lock:
@@ -140,10 +138,7 @@ class CompositionRegistry:
             if k in {"name", "created_at"}:
                 continue
             if k == "segments" and v is not None:
-                merged["segments"] = [
-                    asdict(Segment(**s)) if not isinstance(s, Segment) else asdict(s)
-                    for s in v
-                ]
+                merged["segments"] = [asdict(Segment(**s)) if not isinstance(s, Segment) else asdict(s) for s in v]
             elif v is not None:
                 merged[k] = v
         merged["updated_at"] = self._now()

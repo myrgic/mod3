@@ -1141,9 +1141,7 @@ def update_composition(name: str, req: CompositionUpdateRequest):
 @app.delete("/v1/voices/compositions/{name}")
 def delete_composition(name: str):
     if not _compositions.delete(name):
-        return JSONResponse(
-            status_code=404, content={"deleted": False, "error": "not found"}
-        )
+        return JSONResponse(status_code=404, content={"deleted": False, "error": "not found"})
     return {"deleted": True}
 
 
