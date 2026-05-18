@@ -28,6 +28,13 @@ from .jobs import JobListResponse
 from .sessions import SessionListResponse, SessionRegisterRequest, SessionSubscribersResponse
 from .synthesize import SpeakRequest, SpeechRequest, SynthesizeRequest
 from .vad_filter import VadCheckResponse
+from .compositions import (
+    CompositionCreateRequest,
+    CompositionListResponse,
+    CompositionResponse,
+    CompositionUpdateRequest,
+    SegmentSpec,
+)
 from .voice_profiles import (
     ComposeProfileRequest,
     DeleteProfileResponse,
@@ -49,6 +56,12 @@ __all__ = [
     "DeleteProfileResponse",
     "RegisterProfileRequest",
     "VoiceProfilesResponse",
+    # compositions
+    "CompositionCreateRequest",
+    "CompositionListResponse",
+    "CompositionResponse",
+    "CompositionUpdateRequest",
+    "SegmentSpec",
     # sessions
     "SessionListResponse",
     "SessionRegisterRequest",

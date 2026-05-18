@@ -59,6 +59,8 @@ from modules.voice import VoiceModule
 from schemas.http import (
     BusActRequest,
     ComposeProfileRequest,
+    CompositionCreateRequest,
+    CompositionUpdateRequest,
     RegisterProfileRequest,
     SessionRegisterRequest,
     ShutdownRequest,
@@ -82,6 +84,11 @@ _shutting_down = False
 
 # Voice profile registry — mkdir only; no IO on import.
 _registry = VoiceProfileRegistry()
+
+# Composition (draft) registry — mkdir only; no IO on import.
+from compositions import Composition, CompositionRegistry, Segment  # noqa: E402
+
+_compositions = CompositionRegistry()
 
 
 @asynccontextmanager
@@ -1059,6 +1066,138 @@ def delete_profile(name: str):
             content={"deleted": False, "error": "not found"},
         )
     return {"deleted": True}
+
+
+# ---------------------------------------------------------------------------
+# Compositions — voice-lab iteration unit (draft of a profile)
+# ---------------------------------------------------------------------------
+
+
+def _composition_to_dict(c: Composition) -> dict:
+    return c.to_json()
+
+
+def _segments_from_request(specs) -> list[Segment]:
+    return [Segment(path=s.path, label=s.label, duration_sec=s.duration_sec) for s in specs]
+
+
+@app.get("/v1/voices/compositions")
+def list_compositions():
+    """List all saved composition drafts."""
+    return {"compositions": [_composition_to_dict(c) for c in _compositions.list()]}
+
+
+@app.post("/v1/voices/compositions")
+def create_composition(req: CompositionCreateRequest):
+    """Create a new composition draft. Returns 409 if `name` is taken."""
+    from fastapi import HTTPException
+
+    try:
+        comp = Composition(
+            name=req.name,
+            segments=_segments_from_request(req.segments),
+            engine=req.engine,
+            exaggeration=req.exaggeration,
+            gap_sec=req.gap_sec,
+            notes=req.notes,
+        )
+        created = _compositions.create(comp)
+    except ValueError as exc:
+        msg = str(exc)
+        status = 409 if "already exists" in msg else 400
+        raise HTTPException(status_code=status, detail=msg) from exc
+    return _composition_to_dict(created)
+
+
+@app.get("/v1/voices/compositions/{name}")
+def get_composition(name: str):
+    from fastapi import HTTPException
+
+    comp = _compositions.get(name)
+    if comp is None:
+        raise HTTPException(status_code=404, detail=f"composition {name!r} not found")
+    return _composition_to_dict(comp)
+
+
+@app.patch("/v1/voices/compositions/{name}")
+def update_composition(name: str, req: CompositionUpdateRequest):
+    from fastapi import HTTPException
+
+    patch = req.model_dump(exclude_none=True)
+    if "segments" in patch:
+        patch["segments"] = [
+            {"path": s["path"], "label": s.get("label", ""), "duration_sec": s.get("duration_sec")}
+            for s in patch["segments"]
+        ]
+    try:
+        updated = _compositions.update(name, patch)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"composition {name!r} not found") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _composition_to_dict(updated)
+
+
+@app.delete("/v1/voices/compositions/{name}")
+def delete_composition(name: str):
+    if not _compositions.delete(name):
+        return JSONResponse(
+            status_code=404, content={"deleted": False, "error": "not found"}
+        )
+    return {"deleted": True}
+
+
+@app.post("/v1/voices/compositions/{name}/register")
+def register_composition(name: str, profile_name: str | None = None):
+    """Synthesize a profile from a saved composition.
+
+    Routes to POST /v1/voices/profiles/compose with the composition's segments
+    + settings. `profile_name` query param overrides the composition's `name`
+    for the resulting profile (useful for A/B-ing the same draft).
+    """
+    from fastapi import HTTPException
+
+    comp = _compositions.get(name)
+    if comp is None:
+        raise HTTPException(status_code=404, detail=f"composition {name!r} not found")
+    return compose_profile(
+        ComposeProfileRequest(
+            name=profile_name or comp.name,
+            engine=comp.engine,
+            segment_paths=[s.path for s in comp.segments],
+            gap_sec=comp.gap_sec,
+            exaggeration=comp.exaggeration,
+        )
+    )
+
+
+@app.get("/v1/voices/segments")
+def get_segment_audio(path: str):
+    """Serve a segment WAV for inline preview in the voice lab.
+
+    Path must point to an existing 16-bit PCM WAV under one of:
+      - ~/.mod3/
+      - ~/.claude/jobs/
+      - /tmp/voice_lab/
+      - $TMPDIR / /tmp segment subtrees
+    Anything else is rejected with 403.
+    """
+    import pathlib
+
+    from fastapi import HTTPException
+    from fastapi.responses import FileResponse
+
+    target = pathlib.Path(path).expanduser().resolve()
+    allowed_roots = [
+        (pathlib.Path.home() / ".mod3").resolve(),
+        (pathlib.Path.home() / ".claude" / "jobs").resolve(),
+        pathlib.Path("/tmp/voice_lab").resolve(),
+    ]
+    if not any(target.is_relative_to(root) for root in allowed_roots):
+        raise HTTPException(status_code=403, detail="path is not within an allowed segment root")
+    if not target.exists() or target.suffix.lower() != ".wav":
+        raise HTTPException(status_code=404, detail="segment WAV not found")
+    return FileResponse(str(target), media_type="audio/wav")
 
 
 @app.post("/v1/stop")
