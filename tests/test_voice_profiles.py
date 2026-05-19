@@ -384,3 +384,184 @@ class TestVoiceProfileRegistry:
     def test_delete_nonexistent_returns_false(self, tmp_path):
         reg = self._registry(tmp_path)
         assert reg.delete("nobody") is False
+
+
+# ===========================================================================
+# 4. Primitive 3 — IdentityVoiceProfile schema + cog://voices/* URI resolver
+# ===========================================================================
+
+
+class TestIdentityVoiceProfileSchema:
+    """Tests for the identity-level VoiceProfile schema (Primitive 3)."""
+
+    def test_generative_only_from_dict(self):
+        """from_dict with generative head only; discriminative is None."""
+        from voice_profile_schema import IdentityVoiceProfile
+
+        data = {
+            "generative": {
+                "engine": "chatterbox-turbo",
+                "conditionals_ref": "cog://voices/cog",
+            }
+        }
+        vp = IdentityVoiceProfile.from_dict(data)
+        assert vp.generative is not None
+        assert vp.generative.engine == "chatterbox-turbo"
+        assert vp.generative.conditionals_ref == "cog://voices/cog"
+        assert vp.discriminative is None
+
+    def test_both_heads_from_dict(self):
+        """from_dict with generative and discriminative heads; all fields round-trip."""
+        from voice_profile_schema import IdentityVoiceProfile
+
+        data = {
+            "generative": {
+                "engine": "chatterbox-turbo",
+                "conditionals_ref": "cog://voices/cog",
+                "enrolled_at": "2026-05-19T00:00:00Z",
+            },
+            "discriminative": {
+                "model": "speechbrain/spkrec-ecapa-voxceleb",
+                "embedding_ref": "cog://voices/cog/ecapa-embedding",
+                "enrolled_at": "2026-05-19T00:00:00Z",
+            },
+        }
+        vp = IdentityVoiceProfile.from_dict(data)
+        assert vp.generative is not None
+        assert vp.discriminative is not None
+        assert vp.discriminative.model == "speechbrain/spkrec-ecapa-voxceleb"
+        assert vp.discriminative.embedding_ref == "cog://voices/cog/ecapa-embedding"
+        assert vp.discriminative.enrolled_at == "2026-05-19T00:00:00Z"
+
+    def test_discriminative_enrolled_at_optional(self):
+        """enrolled_at is optional — absent field is None, no error."""
+        from voice_profile_schema import IdentityVoiceProfile
+
+        data = {
+            "discriminative": {
+                "model": "speechbrain/spkrec-ecapa-voxceleb",
+                "embedding_ref": "cog://voices/chaz/ecapa-embedding",
+            }
+        }
+        vp = IdentityVoiceProfile.from_dict(data)
+        assert vp.discriminative is not None
+        assert vp.discriminative.enrolled_at is None
+
+    def test_to_dict_round_trip(self):
+        """to_dict then from_dict must reconstruct an equal profile."""
+        from voice_profile_schema import IdentityVoiceProfile
+
+        data = {
+            "generative": {
+                "engine": "chatterbox-turbo",
+                "conditionals_ref": "cog://voices/cog",
+            },
+            "discriminative": {
+                "model": "speechbrain/spkrec-ecapa-voxceleb",
+                "embedding_ref": "cog://voices/cog/ecapa-embedding",
+            },
+        }
+        vp = IdentityVoiceProfile.from_dict(data)
+        restored = IdentityVoiceProfile.from_dict(vp.to_dict())
+        assert restored.generative.engine == vp.generative.engine
+        assert restored.generative.conditionals_ref == vp.generative.conditionals_ref
+        assert restored.discriminative.model == vp.discriminative.model
+        assert restored.discriminative.embedding_ref == vp.discriminative.embedding_ref
+
+    def test_absent_profile_both_heads_none(self):
+        """Empty dict produces a VoiceProfile with both heads None — no error."""
+        from voice_profile_schema import IdentityVoiceProfile
+
+        vp = IdentityVoiceProfile.from_dict({})
+        assert vp.generative is None
+        assert vp.discriminative is None
+
+
+class TestVoiceProfileDiscriminativeField:
+    """Tests for the discriminative head field on the registry-level VoiceProfile."""
+
+    def test_embedding_ref_absent_defaults_to_none(self):
+        """A pre-Primitive-3 JSON without embedding_ref loads without error."""
+        from voice_profile_schema import VoiceProfile
+
+        data = {
+            "name": "cog",
+            "engine": "chatterbox-turbo",
+            "source_audio_path": "/tmp/cog.wav",
+            "source_sha256": "abc123",
+            "ref_text": None,
+            "exaggeration": 0.5,
+            "model_id": "mlx-community/chatterbox-turbo-4bit",
+            "created_at": "2026-05-19T00:00:00Z",
+        }
+        vp = VoiceProfile.from_json(data)
+        assert vp.embedding_ref is None
+
+    def test_embedding_ref_round_trips(self):
+        """embedding_ref survives to_json/from_json round-trip."""
+        from voice_profile_schema import VoiceProfile
+
+        data = {
+            "name": "cog",
+            "engine": "chatterbox-turbo",
+            "source_audio_path": "/tmp/cog.wav",
+            "source_sha256": "abc123",
+            "ref_text": None,
+            "exaggeration": 0.5,
+            "model_id": "mlx-community/chatterbox-turbo-4bit",
+            "created_at": "2026-05-19T00:00:00Z",
+            "embedding_ref": "cog://voices/cog/ecapa-embedding",
+        }
+        vp = VoiceProfile.from_json(data)
+        assert vp.embedding_ref == "cog://voices/cog/ecapa-embedding"
+        restored = VoiceProfile.from_json(vp.to_json())
+        assert restored.embedding_ref == "cog://voices/cog/ecapa-embedding"
+
+
+class TestVoicesURIResolver:
+    """Tests for resolve_voices_uri — the cog://voices/* local resolver."""
+
+    def test_bare_name_uri_resolves_to_safetensors(self, tmp_path):
+        """cog://voices/<name> resolves to <root>/<name>.safetensors."""
+        from voice_profile_schema import resolve_voices_uri
+
+        result = resolve_voices_uri("cog://voices/cog", registry_root=tmp_path)
+        assert result == tmp_path / "cog.safetensors"
+
+    def test_bare_form_accepted(self, tmp_path):
+        """cog:voices/<name> (bare form, no //) is also accepted."""
+        from voice_profile_schema import resolve_voices_uri
+
+        result = resolve_voices_uri("cog:voices/cog", registry_root=tmp_path)
+        assert result == tmp_path / "cog.safetensors"
+
+    def test_ecapa_embedding_uri_resolves_to_npy(self, tmp_path):
+        """cog://voices/<name>/ecapa-embedding resolves to <root>/<name>.ecapa.npy."""
+        from voice_profile_schema import resolve_voices_uri
+
+        result = resolve_voices_uri("cog://voices/cog/ecapa-embedding", registry_root=tmp_path)
+        assert result == tmp_path / "cog.ecapa.npy"
+
+    def test_various_profile_names(self, tmp_path):
+        """Resolver works with different voice profile names."""
+        from voice_profile_schema import resolve_voices_uri
+
+        for name in ("bm_lewis", "eng_uk_m_davids", "af_heart"):
+            result = resolve_voices_uri(f"cog://voices/{name}", registry_root=tmp_path)
+            assert result == tmp_path / f"{name}.safetensors"
+
+    def test_non_voices_uri_raises(self, tmp_path):
+        """URIs that are not voices namespace raise ValueError."""
+        from voice_profile_schema import resolve_voices_uri
+        import pytest
+
+        with pytest.raises(ValueError, match="not a voices URI"):
+            resolve_voices_uri("cog://mem/semantic/foo", registry_root=tmp_path)
+
+    def test_empty_name_raises(self, tmp_path):
+        """URI with empty name segment raises ValueError."""
+        from voice_profile_schema import resolve_voices_uri
+        import pytest
+
+        with pytest.raises(ValueError):
+            resolve_voices_uri("cog://voices/", registry_root=tmp_path)
