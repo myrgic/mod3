@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## [0.7.0] - 2026-05-19
 
 ### Added — Wave-6b session identity claims
 
