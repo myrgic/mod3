@@ -98,8 +98,11 @@ async def _lifespan(application: FastAPI):
 
     Startup order (pre-yield):
       1. Kokoro warmup — spawns a daemon thread; non-blocking, never fails startup.
-      2. Kernel-bus bridge — subscribes to cycle-trace events for the dashboard.
+      2. Kernel-bus → dashboard bridge — subscribes to cycle-trace events.
          Non-blocking: the subscriber's backoff loop handles an unreachable kernel.
+      3. Auto-create the 'main' session in the voice-TTS session registry.
+         channel_client.py targets this session by default (clients/channel_client.py:79).
+         Idempotent: re-registration on restart updates metadata without touching voice.
 
     Shutdown order (post-yield, reverse of startup):
       2. Stop kernel-bus bridge.
@@ -131,6 +134,36 @@ async def _lifespan(application: FastAPI):
         await start_bridge(application.state)
     except Exception as e:  # noqa: BLE001 — never fail startup on bridge wiring
         logger.warning("bus-bridge startup failed (non-fatal): %s", e)
+
+    # 3. Ensure the 'main' session exists.
+    #
+    #    channel_client.py uses _DEFAULT_SESSION_ID = "main" (clients/channel_client.py:79).
+    #    POST /v1/sessions/main/seats registers seats into a *seat* registry keyed by
+    #    session_id — that path auto-creates the seat bucket — but the voice-TTS
+    #    session_registry (GET /v1/sessions) is a separate registry that requires an
+    #    explicit register call before it will list the session.  Without this, the
+    #    dashboard sees "No active sessions" and /v1/sessions returns {sessions: []}
+    #    even when 3 channel clients are running.
+    #
+    #    We only guarantee 'main'; other sessions are created on explicit request.
+    #    Idempotent: re-registering an existing session_id updates metadata without
+    #    touching the assigned voice (see SessionRegistry.register).
+    _MAIN_SESSION_ID = "main"
+    try:
+        _sr = get_default_registry()
+        _sr_result = _sr.register(
+            session_id=_MAIN_SESSION_ID,
+            participant_id="channel-client-pool",
+            participant_type="agent",
+            preferred_voice=None,
+            preferred_output_device="system-default",
+        )
+        if _sr_result.created:
+            logger.info("auto-created session '%s' on startup", _MAIN_SESSION_ID)
+        else:
+            logger.debug("session '%s' already registered (idempotent restart)", _MAIN_SESSION_ID)
+    except Exception as e:  # noqa: BLE001 — never fail startup on session init
+        logger.warning("auto-create 'main' session failed (non-fatal): %s", e)
 
     yield  # application is running
 
