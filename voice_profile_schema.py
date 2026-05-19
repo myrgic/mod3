@@ -190,7 +190,7 @@ def resolve_voices_uri(uri: str, registry_root: pathlib.Path | None = None) -> p
     # Normalise both cog: and cog:// forms.
     for prefix in ("cog://voices/", "cog:voices/"):
         if uri.startswith(prefix):
-            remainder = uri[len(prefix):]
+            remainder = uri[len(prefix) :]
             break
     else:
         raise ValueError(f"resolve_voices_uri: not a voices URI: {uri!r}")

@@ -133,7 +133,7 @@ def _resolve_voice_uri(uri: str) -> str | None:
     # Strip the namespace prefix to get the remainder.
     for prefix in ("cog://voices/", "cog:voices/"):
         if uri.startswith(prefix):
-            remainder = uri[len(prefix):]
+            remainder = uri[len(prefix) :]
             break
     else:
         return None
