@@ -4,6 +4,12 @@ Consumes `KernelBusSubscriber.stream()` (see `bus_bridge.py`) and fans the
 ADR-083 cycle-trace events out to every connected dashboard WebSocket via
 `BrowserChannel.broadcast_trace_event()` (see `channels.py`).
 
+Also handles identity-projection events (identity.projected,
+identity.expression.updated) via ``handle_identity_event`` from
+``identity_projection_handler``. These update the module-level
+``IDENTITY_VOICE_CACHE`` so the TTS path can look up pre-resolved voice
+conditionals by identity subject slug.
+
 Wiring:
 
   kernel (bus_cycle_trace)
@@ -11,6 +17,7 @@ Wiring:
             └─► KernelBusSubscriber.stream()       [C1]
                    └─► run_bridge() filter + forward
                           └─► BrowserChannel.broadcast_trace_event()  [C2]
+                          └─► handle_identity_event() for IDENTITY_KINDS  [C3]
 
 The subscriber does its own reconnect with exponential backoff, so a kernel
 that is temporarily unreachable does not affect server startup. Disable the
@@ -26,8 +33,19 @@ from typing import Optional
 
 from bus_bridge import KernelBusSubscriber, default_stream_url
 from channels import BrowserChannel
+from identity_projection_handler import (
+    IDENTITY_KINDS,
+    IdentityVoiceCache,
+    handle_identity_event,
+)
 
 logger = logging.getLogger("mod3.bus_bridge")
+
+# Module-level identity voice cache. Populated by the SSE bridge loop as
+# identity.projected / identity.expression.updated events arrive. The TTS
+# path (engine.resolve_model) can consult this for pre-resolved conditionals.
+# Exported so tests and the TTS path can import it directly.
+IDENTITY_VOICE_CACHE: IdentityVoiceCache = IdentityVoiceCache()
 
 # ADR-083 kinds the dashboard trace panel cares about. Kept as a module-level
 # constant so tests and the lifespan wiring share one definition.
@@ -50,23 +68,43 @@ async def run_bridge(
     subscriber: KernelBusSubscriber,
     *,
     filter_kinds: Optional[set[str]] = None,
+    identity_cache: Optional[IdentityVoiceCache] = None,
 ) -> None:
     """Consume `subscriber` and broadcast cycle-trace events to dashboard clients.
 
+    Also dispatches identity-projection events to ``handle_identity_event``
+    regardless of `filter_kinds`, since identity state updates are side-effects
+    on the voice cache, not dashboard broadcasts.
+
     `filter_kinds`:
-      - `None`: forward everything (dev mode — useful when inspecting the raw
-        stream through a dashboard).
+      - `None`: forward everything to the dashboard (dev mode).
       - set of kind strings: only forward envelopes whose `BusEnvelope.kind`
-        is in the set. Unknown kinds are tolerated per ADR-083 — they simply
-        won't pass this filter.
+        is in the set to the dashboard. Identity-projection events are always
+        handled independently of this filter.
+
+    `identity_cache`: the IdentityVoiceCache to update on identity events.
+    Defaults to the module-level ``IDENTITY_VOICE_CACHE`` when None.
 
     `BrowserChannel.broadcast_trace_event()` is thread-safe and non-blocking:
     it dispatches each WS send via `run_coroutine_threadsafe`. We call it
     directly (no await).
     """
+    cache = identity_cache if identity_cache is not None else IDENTITY_VOICE_CACHE
     first_event_logged = False
     forwarded = 0
     async for env in subscriber.stream():
+        # Identity-projection events are handled unconditionally — they update
+        # the voice cache as a side effect, independent of dashboard filtering.
+        if env.kind in IDENTITY_KINDS:
+            try:
+                handle_identity_event(env.payload, cache)
+            except Exception as exc:  # noqa: BLE001 — handler errors must not crash the loop
+                logger.warning(
+                    "bridge: identity event handler raised unexpectedly kind=%s: %s",
+                    env.kind,
+                    exc,
+                )
+
         if filter_kinds is not None and env.kind not in filter_kinds:
             continue
         # The "connected" bootstrap frame has an empty payload; skip silently.
