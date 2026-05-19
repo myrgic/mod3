@@ -33,6 +33,7 @@ from schemas.acp import (
     SessionPromptParams,
     SessionPromptResult,
     SessionUpdateNotification,
+    SessionUpdateParams,
     SessionUpdatePayload,
     TextContent,
 )
@@ -217,32 +218,61 @@ class TestSessionCancelNotification:
 
 
 # ---------------------------------------------------------------------------
-# session/update notification
+# session/update notification — spec-compliant nested shape
+#
+# Per [[reference/acp-protocol-spec]] (schema.json SessionNotification):
+# params = {sessionId, update: {sessionUpdate, content}}
+# Prior to 2026-05-19 mod3 used a flat shape; these tests pin the corrected form.
 # ---------------------------------------------------------------------------
 
 
 class TestSessionUpdateNotification:
-    def test_wire_shape(self):
+    def test_wire_shape_nested(self):
+        """session/update params must use the spec-compliant nested update envelope."""
         notif = SessionUpdateNotification.text_chunk(session_id="s1", text="Hello ")
         data = notif.model_dump()
         assert data["jsonrpc"] == "2.0"
         assert data["method"] == "session/update"
         params = data["params"]
+        # sessionId at the top level of params
         assert params["sessionId"] == "s1"
-        assert params["sessionUpdate"] == "agent_message_chunk"
-        assert params["content"]["type"] == "text"
-        assert params["content"]["text"] == "Hello "
+        # update is a nested object — NOT flat in params
+        assert "update" in params, "spec requires params.update; flat params.sessionUpdate is the old broken shape"
+        update = params["update"]
+        assert update["sessionUpdate"] == "agent_message_chunk"
+        assert update["content"]["type"] == "text"
+        assert update["content"]["text"] == "Hello "
 
-    def test_payload_defaults(self):
-        p = SessionUpdatePayload(sessionId="s1")
+    def test_wire_shape_no_flat_fields_in_params(self):
+        """sessionUpdate and content must NOT appear as flat params keys."""
+        notif = SessionUpdateNotification.text_chunk(session_id="s1", text="Hi")
+        data = notif.model_dump()
+        params = data["params"]
+        assert "sessionUpdate" not in params, "sessionUpdate must be nested under params.update, not flat in params"
+        assert "content" not in params, "content must be nested under params.update, not flat in params"
+
+    def test_payload_inner_object_defaults(self):
+        """SessionUpdatePayload (the inner update object) defaults are correct."""
+        p = SessionUpdatePayload()
         assert p.sessionUpdate == "agent_message_chunk"
         assert p.content is None
+
+    def test_params_envelope_shape(self):
+        """SessionUpdateParams (the full params envelope) carries sessionId + update."""
+        p = SessionUpdateParams(
+            sessionId="mod3-abc",
+            update=SessionUpdatePayload(sessionUpdate="agent_message_chunk"),
+        )
+        assert p.sessionId == "mod3-abc"
+        assert p.update.sessionUpdate == "agent_message_chunk"
 
     def test_json_round_trip(self):
         notif = SessionUpdateNotification.text_chunk(session_id="s2", text="world")
         serialized = notif.model_dump_json()
         data = json.loads(serialized)
-        assert data["params"]["content"]["text"] == "world"
+        # Nested shape
+        assert data["params"]["update"]["content"]["text"] == "world"
+        assert data["params"]["sessionId"] == "s2"
 
 
 # ---------------------------------------------------------------------------

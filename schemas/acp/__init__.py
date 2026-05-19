@@ -1,7 +1,7 @@
 """schemas.acp — Pydantic models for the Agent Client Protocol (ACP).
 
-ACP is Zed's Agent Client Protocol — JSON-RPC 2.0 over WebSocket.
-Spec: https://github.com/zed-industries/agent-client-protocol
+ACP is the Agent Client Protocol — JSON-RPC 2.0 over WebSocket.
+Spec: https://github.com/agentclientprotocol/agent-client-protocol
 
 This package exposes the minimum viable subset needed to implement
 the /ws/acp endpoint in mod3: initialization, session lifecycle,
@@ -19,7 +19,14 @@ From ``methods``:
     SessionCancelParams
 
 From ``notifications``:
-    SessionUpdateNotification, SessionUpdatePayload
+    SessionUpdateNotification, SessionUpdateParams, SessionUpdatePayload
+
+    NOTE on wire shape: the spec-compliant ``session/update`` params are
+    ``{sessionId, update: {sessionUpdate, content}}``. ``SessionUpdateParams``
+    is the full params envelope; ``SessionUpdatePayload`` is the inner
+    ``update`` object. Prior to 2026-05-19 mod3 used a flat params shape
+    (``sessionUpdate`` and ``content`` at the top level of params); that was
+    a divergence from the ACP spec. See notifications.py module docstring.
 
 From ``content``:
     TextContent, ImageContent, AudioContent,
@@ -51,7 +58,7 @@ from .methods import (
     SessionPromptParams,
     SessionPromptResult,
 )
-from .notifications import SessionUpdateNotification, SessionUpdatePayload
+from .notifications import SessionUpdateNotification, SessionUpdateParams, SessionUpdatePayload
 
 __all__ = [
     # envelope
@@ -71,6 +78,7 @@ __all__ = [
     "SessionPromptResult",
     # notifications
     "SessionUpdateNotification",
+    "SessionUpdateParams",
     "SessionUpdatePayload",
     # content
     "AudioContent",
