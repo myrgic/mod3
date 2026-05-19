@@ -182,7 +182,7 @@ def resolve_voices_uri(uri: str, registry_root: pathlib.Path | None = None) -> p
         ValueError: Name segment is empty.
 
     Resolution table:
-        cog://voices/<name>                  → <root>/<name>  (directory entry stub)
+        cog://voices/<name>                  → <root>/<name>.safetensors
         cog://voices/<name>/ecapa-embedding  → <root>/<name>.ecapa.npy
     """
     root = registry_root if registry_root is not None else _DEFAULT_VOICE_REGISTRY_ROOT
