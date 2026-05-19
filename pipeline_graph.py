@@ -109,11 +109,11 @@ DEFAULT_PIPELINES: dict[ChannelMode, list[str]] = {
     ChannelMode.AMBIENT: [
         "denoise",
         "vad",
-        "diarize",        # follow-on PR: pyannote-based speaker diarization
-        "ecapa_match",    # follow-on PR: ECAPA-TDNN identity matching
+        "diarize",  # follow-on PR: pyannote-based speaker diarization
+        "ecapa_match",  # follow-on PR: ECAPA-TDNN identity matching
         "stt",
-        "attribute",      # follow-on PR: attach speaker identity to transcript
-        "mention_detect", # follow-on PR: detect Cog mentions / appropriate silence
+        "attribute",  # follow-on PR: attach speaker identity to transcript
+        "mention_detect",  # follow-on PR: detect Cog mentions / appropriate silence
         "emit",
     ],
 }
@@ -167,8 +167,7 @@ def compose_stages(stage_names: list[str]) -> list[object]:
             stages.append(STAGE_REGISTRY[name]())
         else:
             logger.warning(
-                "compose_stages: stage %r is not registered — skipping "
-                "(implement and @register_stage(%r) to enable)",
+                "compose_stages: stage %r is not registered — skipping (implement and @register_stage(%r) to enable)",
                 name,
                 name,
             )

@@ -87,9 +87,7 @@ class TestDefaultPipelines:
         assert stages[-1] == "emit"
 
     def test_ambient_stages_longer_than_intentional(self):
-        assert len(DEFAULT_PIPELINES[ChannelMode.AMBIENT]) > len(
-            DEFAULT_PIPELINES[ChannelMode.INTENTIONAL]
-        )
+        assert len(DEFAULT_PIPELINES[ChannelMode.AMBIENT]) > len(DEFAULT_PIPELINES[ChannelMode.INTENTIONAL])
 
 
 # ---------------------------------------------------------------------------
