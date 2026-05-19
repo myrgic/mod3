@@ -2580,6 +2580,10 @@ async def ws_acp(websocket: WebSocket):
       session/new     -- create a session
       session/prompt  -- submit a user prompt (streams via session/update notifications)
       session/cancel  -- cancel in-flight prompt (notification, no response)
+      session/list    -- list registered TTS sessions (optional)
+      session/load    -- retrieve state of a specific session (optional)
+      session/resume  -- bind this ACP connection to a named session (optional)
+      authenticate    -- auth handshake; no-op when authMethods is empty
 
     Prompts are fanned to attached channel-client seats via the seat registry.
     Responses flow through the channel client (speak / mod3_dashboard_post),
@@ -2592,11 +2596,17 @@ async def ws_acp(websocket: WebSocket):
 
     from schemas.acp import (
         AgentCapabilities,
+        AuthenticateResult,
         InitializeResult,
         JsonRpcResponse,
         PromptCapabilities,
+        SessionCapabilities,
+        SessionListItem,
+        SessionListResult,
+        SessionLoadResult,
         SessionNewResult,
         SessionPromptResult,
+        SessionResumeResult,
     )
 
     await websocket.accept()
@@ -2692,7 +2702,8 @@ async def ws_acp(websocket: WebSocket):
                 result = InitializeResult(
                     agentCapabilities=AgentCapabilities(
                         promptCapabilities=PromptCapabilities(audio=False, image=False, embeddedContext=False),
-                        sessionCapabilities={},
+                        sessionCapabilities=SessionCapabilities(list=True, resume=True),
+                        loadSession=True,
                     )
                 )
                 await _send_response(msg_id, result)
@@ -2756,6 +2767,65 @@ async def ws_acp(websocket: WebSocket):
                 if session_info:
                     session_info["cancel"].set()
                 # No response for notifications.
+
+            # ---- session/list ----
+            elif method == "session/list":
+                from session_registry import get_default_registry
+
+                registry = get_default_registry()
+                items = [
+                    SessionListItem(
+                        sessionId=s["session_id"],
+                        state=s.get("state", "idle"),
+                        participantId=s.get("participant_id", ""),
+                        participantType=s.get("participant_type", ""),
+                    )
+                    for s in registry.list_serialized()
+                ]
+                result = SessionListResult(sessions=items)
+                await _send_response(msg_id, result)
+
+            # ---- session/load ----
+            elif method == "session/load":
+                from session_registry import get_default_registry
+
+                target_id = params.get("sessionId", "")
+                if not target_id:
+                    await _send_error(msg_id, _ACP_INVALID_PARAMS, "sessionId is required")
+                    continue
+                registry = get_default_registry()
+                session_obj = registry.get(target_id)
+                if session_obj is None:
+                    await _send_error(
+                        msg_id,
+                        _ACP_INTERNAL_ERROR,
+                        f"session '{target_id}' not found",
+                    )
+                    continue
+                state_dict = session_obj.to_dict()
+                result = SessionLoadResult(sessionId=target_id, state=state_dict)
+                await _send_response(msg_id, result)
+
+            # ---- session/resume ----
+            elif method == "session/resume":
+                target_id = params.get("sessionId", "")
+                if not target_id:
+                    await _send_error(msg_id, _ACP_INVALID_PARAMS, "sessionId is required")
+                    continue
+                # Bind the ACP connection to the named session so subsequent
+                # session/prompt calls fan to seats in that session.
+                if target_id not in _sessions:
+                    _sessions[target_id] = {"cancel": asyncio.Event()}
+                result = SessionResumeResult(sessionId=target_id)
+                await _send_response(msg_id, result)
+
+            # ---- authenticate ----
+            elif method == "authenticate":
+                # authMethods is [] — no auth is required. Return success
+                # unconditionally. If authMethods were non-empty, methodId
+                # handling would go here.
+                result = AuthenticateResult(success=True)
+                await _send_response(msg_id, result)
 
             # ---- unknown ----
             else:
