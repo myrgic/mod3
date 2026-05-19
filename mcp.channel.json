@@ -3,7 +3,10 @@
     "mod3": {
       "command": "python3",
       "args": ["/Users/slowbro/workspaces/myrgic/mod3/clients/channel_client.py"],
-      "_comment": "Claude Code channel client. Start with: claude --dangerously-load-development-channels server:mod3"
+      "env": {
+        "MOD3_SESSION_ID": "${CLAUDE_CODE_SESSION_ID:-main}"
+      },
+      "_comment": "Claude Code channel client. Start with: claude --dangerously-load-development-channels server:mod3. The env block pulls the harness session id into MOD3_SESSION_ID so each Claude Code session registers a distinct seat (instead of all collapsing into 'main')."
     }
   },
   "_channelCapabilities": {
