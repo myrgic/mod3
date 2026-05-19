@@ -151,13 +151,19 @@ class TestInitializeMethods:
         assert caps.promptCapabilities.audio is False
         assert caps.promptCapabilities.image is False
         assert caps.promptCapabilities.embeddedContext is False
-        assert caps.sessionCapabilities == {}
+        # sessionCapabilities is now a typed model, not a raw dict
+        assert caps.sessionCapabilities.list is False
+        assert caps.sessionCapabilities.resume is False
+        assert caps.loadSession is False
 
     def test_result_wire_shape(self):
+        from schemas.acp import SessionCapabilities
+
         r = InitializeResult(
             agentCapabilities=AgentCapabilities(
                 promptCapabilities=PromptCapabilities(audio=False, image=False, embeddedContext=False),
-                sessionCapabilities={},
+                sessionCapabilities=SessionCapabilities(list=False, resume=False),
+                loadSession=False,
             )
         )
         data = r.model_dump()

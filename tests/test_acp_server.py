@@ -77,7 +77,10 @@ class TestAcpInitialize:
         assert caps["promptCapabilities"]["audio"] is False
         assert caps["promptCapabilities"]["image"] is False
         assert caps["promptCapabilities"]["embeddedContext"] is False
-        assert caps["sessionCapabilities"] == {}
+        # session/list + session/resume advertised; loadSession advertised
+        assert caps["sessionCapabilities"]["list"] is True
+        assert caps["sessionCapabilities"]["resume"] is True
+        assert caps["loadSession"] is True
 
     def test_initialize_handles_string_id(self, client):
         with client.websocket_connect("/ws/acp") as ws:
