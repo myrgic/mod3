@@ -128,8 +128,6 @@ def _resolve_voice_uri(uri: str) -> str | None:
     The sub-path form cog://voices/<name>/ecapa-embedding is a discriminative
     head reference and does not resolve to a TTS profile.
     """
-    from voice_profile_schema import resolve_voices_uri  # noqa: PLC0415
-
     if not (uri.startswith("cog://voices/") or uri.startswith("cog:voices/")):
         return None
     # Strip the namespace prefix to get the remainder.

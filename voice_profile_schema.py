@@ -5,7 +5,6 @@ import pathlib
 from dataclasses import asdict, dataclass, field
 from typing import List, Optional
 
-
 # ---------------------------------------------------------------------------
 # Registry-level VoiceProfile (Primitive 3 generative head, Wave 6c)
 # ---------------------------------------------------------------------------

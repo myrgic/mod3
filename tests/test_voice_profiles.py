@@ -552,16 +552,18 @@ class TestVoicesURIResolver:
 
     def test_non_voices_uri_raises(self, tmp_path):
         """URIs that are not voices namespace raise ValueError."""
-        from voice_profile_schema import resolve_voices_uri
         import pytest
+
+        from voice_profile_schema import resolve_voices_uri
 
         with pytest.raises(ValueError, match="not a voices URI"):
             resolve_voices_uri("cog://mem/semantic/foo", registry_root=tmp_path)
 
     def test_empty_name_raises(self, tmp_path):
         """URI with empty name segment raises ValueError."""
-        from voice_profile_schema import resolve_voices_uri
         import pytest
+
+        from voice_profile_schema import resolve_voices_uri
 
         with pytest.raises(ValueError):
             resolve_voices_uri("cog://voices/", registry_root=tmp_path)
