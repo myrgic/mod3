@@ -57,6 +57,13 @@ class SessionRegisterRequest(_Base):
     # these None.
     assistant_iss: str | None = Field(default=None, description="OIDC issuer for agent identity")
     assistant_sub: str | None = Field(default=None, description="OIDC subject slug for agent identity (e.g. 'cog')")
+    # Primitive 4: channel pipeline mode — optional, backward compatible.
+    # "intentional" (default) = session-scoped, explicit participation.
+    # "ambient" = always-on, VAD-gated, continuous diarization.
+    channel_mode: str = Field(
+        default="intentional",
+        description="Pipeline composition mode. 'intentional' (default) or 'ambient'.",
+    )
 
 
 class SessionSubscribersResponse(_Base):
