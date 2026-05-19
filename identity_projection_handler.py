@@ -48,7 +48,7 @@ from __future__ import annotations
 
 import logging
 import pathlib
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 from voice_profile_schema import IdentityVoiceProfile, resolve_voices_uri

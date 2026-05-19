@@ -28,13 +28,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from bus_bridge import BusEnvelope  # noqa: E402
 from identity_projection_handler import (  # noqa: E402
-    IDENTITY_KIND_PROJECTED,
     IDENTITY_KIND_EXPRESSION_UPDATED,
+    IDENTITY_KIND_PROJECTED,
     IDENTITY_KINDS,
     IdentityVoiceCache,
     handle_identity_event,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
