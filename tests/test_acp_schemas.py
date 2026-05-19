@@ -237,9 +237,7 @@ class TestSessionUpdateNotification:
         # sessionId at the top level of params
         assert params["sessionId"] == "s1"
         # update is a nested object — NOT flat in params
-        assert "update" in params, (
-            "spec requires params.update; flat params.sessionUpdate is the old broken shape"
-        )
+        assert "update" in params, "spec requires params.update; flat params.sessionUpdate is the old broken shape"
         update = params["update"]
         assert update["sessionUpdate"] == "agent_message_chunk"
         assert update["content"]["type"] == "text"
@@ -250,12 +248,8 @@ class TestSessionUpdateNotification:
         notif = SessionUpdateNotification.text_chunk(session_id="s1", text="Hi")
         data = notif.model_dump()
         params = data["params"]
-        assert "sessionUpdate" not in params, (
-            "sessionUpdate must be nested under params.update, not flat in params"
-        )
-        assert "content" not in params, (
-            "content must be nested under params.update, not flat in params"
-        )
+        assert "sessionUpdate" not in params, "sessionUpdate must be nested under params.update, not flat in params"
+        assert "content" not in params, "content must be nested under params.update, not flat in params"
 
     def test_payload_inner_object_defaults(self):
         """SessionUpdatePayload (the inner update object) defaults are correct."""

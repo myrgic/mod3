@@ -77,9 +77,7 @@ class TestServerSideEmission:
         assert "sessionUpdate" not in params, (
             "sessionUpdate must be inside params.update, not at params root (old flat shape)"
         )
-        assert "content" not in params, (
-            "content must be inside params.update, not at params root (old flat shape)"
-        )
+        assert "content" not in params, "content must be inside params.update, not at params root (old flat shape)"
 
     def test_json_serialization_round_trip(self):
         notif = SessionUpdateNotification.text_chunk(session_id="rt-sid", text="round trip")

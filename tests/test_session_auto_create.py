@@ -55,9 +55,7 @@ class TestMainSessionAutoCreate:
         assert resp.status_code == 200
         data = resp.json()
         session_ids = [s["session_id"] for s in data["sessions"]]
-        assert "main" in session_ids, (
-            f"Expected 'main' in sessions after startup, got: {session_ids}"
-        )
+        assert "main" in session_ids, f"Expected 'main' in sessions after startup, got: {session_ids}"
 
     def test_get_session_main_returns_200(self, client):
         """GET /v1/sessions/main must return 200 (not 404) after startup."""
@@ -109,7 +107,5 @@ class TestMainSessionAutoCreate:
             participant_id="channel-client-pool",
             participant_type="agent",
         )
-        assert result.created is False, (
-            "Re-registering 'main' must return created=False (idempotent)"
-        )
+        assert result.created is False, "Re-registering 'main' must return created=False (idempotent)"
         assert result.session.session_id == "main"
