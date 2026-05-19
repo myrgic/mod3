@@ -2,7 +2,29 @@
 
 ## Unreleased
 
-_(no entries — see [0.6.0] below)_
+### Added — Wave-6b session identity claims
+
+- **`iss`/`sub` on seat registration** -- `register_session` now emits `presence.started` with issuer and subject fields set from the CogOS identity context. (#89)
+- **Multi-identity harness binding** -- a single harness seat can now carry multiple identity claims (user + agent simultaneously); `seats.py` updated with `user_iss`/`user_sub` and `agent_iss`/`agent_sub` pairs. (#91)
+
+### Added — Voice subsystem
+
+- **`VoiceProfile` schema adoption** -- `voice_profile_schema.py` is the canonical schema layer; mod3 now reads voice config from CogOS identity projection events via `IdentityVoiceProfile`. `cog://voices/*` URIs are resolved to the local registry under `~/.mod3/voices/`. (#90)
+- **URI resolver docstring fix** -- corrected stale comment on `resolve_voices_uri` that referenced the old field names. (#97)
+
+### Added — Channel pipeline composability
+
+- **`ChannelMode` + composable stage graph** -- `channels.py` introduces `ChannelMode` (passthrough / transcribe / agent) and a directed acyclic stage graph; pipeline stages are composed at startup rather than hard-wired. (#92)
+- **`@register_stage` intentional stages** -- `inbound.py` extracts the intentional pipeline stages (VAD, STT, intent classification) into `@register_stage`-decorated classes so the stage graph can enumerate and wire them automatically. (#98)
+
+### Added — ACP transport
+
+- **`session/list`, `session/load`, `session/resume`, `authenticate`** -- the four missing ACP methods are now wired in `http_api.py`; mod3 is a conforming ACP server for session lifecycle. (#100)
+- **Auto-create main session + `session/update` wire-shape fix** -- a `main` session is created at startup so clients can connect immediately; the `session/update` request shape now matches the ACP spec. (#101)
+
+### Added — SSE bridge for identity-projection events
+
+- **`/v1/events/identity-projection` SSE endpoint** -- `bus_bridge.py` wires a Server-Sent Events handler for CogOS identity-projection events so the dashboard and channel clients receive voice and identity updates in real time. (#99)
 
 ## [0.6.0] - 2026-05-16
 
