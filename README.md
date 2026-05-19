@@ -125,10 +125,15 @@ Show loaded engines, active jobs, output device, and last generation metrics.
 Key modules:
 
 - **`server.py`** -- MCP tool definitions, multi-model registry, sentence chunking, non-blocking job management, queue-aware returns
-- **`http_api.py`** -- FastAPI HTTP server; mounts the HTTP-MCP transport at `/mcp`, the ACP WebSocket endpoint at `/ws/acp`, and per-session audio at `/ws/audio/{session_id}`
-- **`adaptive_player.py`** -- Callback-based audio playback with EMA arrival rate tracking, adaptive startup threshold, and structured metrics collection
+- **`http_api.py`** -- FastAPI HTTP server; mounts the HTTP-MCP transport at `/mcp`, the ACP WebSocket endpoint at `/ws/acp`, and per-session audio at `/ws/audio/{session_id}`; implements ACP `session/list`, `session/load`, `session/resume`, and `authenticate`
+- **`channels.py`** -- `ChannelMode` enum (passthrough / transcribe / agent) and composable directed-acyclic stage graph; pipeline stages are wired at startup from registered `@register_stage` classes
+- **`inbound.py`** -- Intentional pipeline stages (VAD, STT, intent classification) as `@register_stage`-decorated classes; consumed by the channel stage graph
 - **`bus.py`** -- Session-aware event bus; sessions are first-class, per-session routing replaces broadcast fan-out (ADR-082)
-- **`voice_profiles.py`** / **`voice_profile_io.py`** -- Voice profile registry; cloned voice profiles stored under `~/.mod3/voices/` are addressable as first-class voice IDs
+- **`bus_bridge.py`** -- SSE bridge that forwards CogOS kernel events (identity projection, voice config) to connected dashboard and channel clients
+- **`seats.py`** -- Seat registration and identity claim management; `register_session` emits `presence.started` with `iss`/`sub` pairs for both user and agent identities
+- **`identity_projection_handler.py`** -- Handles incoming CogOS identity-projection events; updates active seat voice config from `IdentityVoiceProfile`
+- **`adaptive_player.py`** -- Callback-based audio playback with EMA arrival rate tracking, adaptive startup threshold, and structured metrics collection
+- **`voice_profiles.py`** / **`voice_profile_io.py`** / **`voice_profile_schema.py`** -- Voice profile registry and schema; cloned voices stored under `~/.mod3/voices/` addressable as first-class voice IDs; `IdentityVoiceProfile` schema mirrors the CogOS identity CRD for voice config received via projection events
 - **`chat_flow_log.py`** -- Structured turn lifecycle log with per-phase wall-time instrumentation and W3C traceparent propagation
 - **`dashboard/`** -- Three-column browser dashboard: sessions sidebar, main chat panel, and Settings / Traces / Debug side panel with hierarchical span tree
 
