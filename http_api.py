@@ -1407,9 +1407,13 @@ async def seat_register(session_id: str, request: Request):
 
     client_type = body.get("client_type", "generic")
     device_uuid = body.get("device_uuid", "")
-    # Identity claims (Wave 6b) — optional; absent = unattributed seat
-    iss: str | None = body.get("iss") or None
-    sub: str | None = body.get("sub") or None
+    # Identity claims — optional; absent = unattributed seat
+    # Wave 6b: iss/sub as user identity (backward compat field names preserved)
+    user_iss: str | None = body.get("user_iss") or body.get("iss") or None
+    user_sub: str | None = body.get("user_sub") or body.get("sub") or None
+    # Wave 6c / Primitive 2: agent identity for agentic harnesses (Claude Code, Cursor)
+    assistant_iss: str | None = body.get("assistant_iss") or None
+    assistant_sub: str | None = body.get("assistant_sub") or None
 
     # Optional: enforce access policy from access.py if available
     try:
@@ -1446,44 +1450,61 @@ async def seat_register(session_id: str, request: Request):
         session_id=session_id,
         client_type=client_type,
         device_uuid=device_uuid,
-        iss=iss,
-        sub=sub,
+        user_iss=user_iss,
+        user_sub=user_sub,
+        assistant_iss=assistant_iss,
+        assistant_sub=assistant_sub,
     )
     logger.info("Seat registered: %s in session %s", seat.seat_id, session_id)
 
-    # Wave 6b: emit presence.started when identity claims are present.
+    # Emit presence.started when any identity claim is present.
     #
-    # Shape: { type, iss, sub, session_id, seat_id, harness_session_id }
-    # harness_session_id: the Claude Code session ID that registered this seat,
-    # carried as device_uuid by convention (the channel client sets it).
+    # Shape (Wave 6c / Primitive 2):
+    #   { type, user_iss, user_sub, assistant_iss, assistant_sub,
+    #     session_id, seat_id, harness_session_id }
+    #
+    # harness_session_id: the Claude Code session ID carried as device_uuid by
+    # convention (the channel client sets it to its own Claude Code session ID).
     #
     # Fan-out to ALL sessions so the dashboard and any listening reconciler
-    # can see the event. The kernel reconciler integration is a follow-up
-    # (Wave 6c / ChannelProvider); this wave ensures the event shape is correct
-    # and the emission path works end-to-end.
-    if iss or sub:
+    # can see the event. Kernel reconciler integration is Wave 6c / ChannelProvider.
+    #
+    # Trust model (v1): claims are accepted at face value. The launch context
+    # (stdio child of kernel process inheriting node identity) is the implicit
+    # attestation. Crypto enforcement deferred to v2.
+    if user_iss or user_sub or assistant_iss or assistant_sub:
         presence_event: dict = {
             "type": "presence.started",
-            "iss": iss,
-            "sub": sub,
+            "user_iss": user_iss,
+            "user_sub": user_sub,
+            "assistant_iss": assistant_iss,
+            "assistant_sub": assistant_sub,
             "session_id": session_id,
             "seat_id": seat.seat_id,
             "harness_session_id": device_uuid or None,
         }
         registry.fan_out_all(presence_event)
         logger.info(
-            "presence.started emitted: iss=%r sub=%r seat=%s session=%s",
-            iss,
-            sub,
+            "presence.started emitted: user=%r agent=%r seat=%s session=%s",
+            user_sub,
+            assistant_sub,
             seat.seat_id,
             session_id,
         )
+
+    identity_resp: dict = {}
+    if user_iss or user_sub:
+        identity_resp["user_iss"] = user_iss
+        identity_resp["user_sub"] = user_sub
+    if assistant_iss or assistant_sub:
+        identity_resp["assistant_iss"] = assistant_iss
+        identity_resp["assistant_sub"] = assistant_sub
 
     return {
         "seat_id": seat.seat_id,
         "session_id": seat.session_id,
         "client_type": seat.client_type,
-        **({"iss": iss, "sub": sub} if iss or sub else {}),
+        **identity_resp,
     }
 
 

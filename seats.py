@@ -50,10 +50,15 @@ class Seat:
     client_type: str
     device_uuid: str
     created_at: float = field(default_factory=time.time)
-    # Identity claims (Wave 6b) — OIDC iss/sub for the principal holding this seat.
+    # Wave 6b: user identity OIDC claims — who the human operator is.
     # None means unattributed (pre-Wave-6b callers; backward compatible).
-    iss: str | None = None
-    sub: str | None = None
+    user_iss: str | None = None
+    user_sub: str | None = None
+    # Wave 6c / Primitive 2: agent identity claims — the LLM entity co-present
+    # with the user. Only set for agentic harnesses (Claude Code, Cursor, etc.).
+    # Non-agentic seats leave these None.
+    assistant_iss: str | None = None
+    assistant_sub: str | None = None
     # SSE event queue — one entry per pending event
     queue: asyncio.Queue = field(default_factory=asyncio.Queue)
     # asyncio loop that owns this seat's queue
@@ -66,13 +71,13 @@ class Seat:
             "client_type": self.client_type,
             "device_uuid": self.device_uuid,
             "created_at": self.created_at,
+            # All four identity fields are always present in the dict so
+            # callers can pattern-match on None rather than key presence.
+            "user_iss": self.user_iss,
+            "user_sub": self.user_sub,
+            "assistant_iss": self.assistant_iss,
+            "assistant_sub": self.assistant_sub,
         }
-        # Include identity claims only when present so the response is
-        # backward-compatible with callers that don't expect these fields.
-        if self.iss is not None:
-            d["iss"] = self.iss
-        if self.sub is not None:
-            d["sub"] = self.sub
         return d
 
 
@@ -98,6 +103,12 @@ class SeatRegistry:
         session_id: str,
         client_type: str,
         device_uuid: str,
+        user_iss: str | None = None,
+        user_sub: str | None = None,
+        assistant_iss: str | None = None,
+        assistant_sub: str | None = None,
+        # Wave 6b backward-compat aliases: callers passing iss/sub before the
+        # Primitive-2 rename are mapped to user_iss/user_sub transparently.
         iss: str | None = None,
         sub: str | None = None,
     ) -> Seat:
@@ -107,9 +118,17 @@ class SeatRegistry:
             session_id: Target session (auto-created if absent).
             client_type: One of VALID_CLIENT_TYPES; falls back to "generic".
             device_uuid: Persistent client-side UUID.
-            iss: Optional OIDC issuer for the identity holding this seat.
-            sub: Optional OIDC subject slug (e.g. "cog", "chaz").
+            user_iss: OIDC issuer for the human operator identity.
+            user_sub: OIDC subject slug for the user (e.g. "chaz").
+            assistant_iss: OIDC issuer for the agent identity (agentic harnesses only).
+            assistant_sub: OIDC subject slug for the agent (e.g. "cog").
+            iss: Deprecated alias for user_iss (Wave 6b callers).
+            sub: Deprecated alias for user_sub (Wave 6b callers).
         """
+        # Merge Wave-6b aliases into the canonical user_* fields.
+        resolved_user_iss = user_iss or iss or None
+        resolved_user_sub = user_sub or sub or None
+
         if client_type not in VALID_CLIENT_TYPES:
             client_type = "generic"
         seat_id = str(uuid.uuid4())
@@ -118,14 +137,19 @@ class SeatRegistry:
             session_id=session_id,
             client_type=client_type,
             device_uuid=device_uuid,
-            iss=iss,
-            sub=sub,
+            user_iss=resolved_user_iss,
+            user_sub=resolved_user_sub,
+            assistant_iss=assistant_iss,
+            assistant_sub=assistant_sub,
         )
         with self._lock:
             if session_id not in self._seats:
                 self._seats[session_id] = {}
             self._seats[session_id][seat_id] = seat
-        identity_info = f" iss={iss!r} sub={sub!r}" if iss or sub else ""
+        if resolved_user_sub or assistant_sub:
+            identity_info = f" user={resolved_user_sub!r} agent={assistant_sub!r}"
+        else:
+            identity_info = ""
         logger.info(
             "Seat %s registered in session %s (client=%s%s)",
             seat_id,
