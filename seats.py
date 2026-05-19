@@ -59,6 +59,10 @@ class Seat:
     # Non-agentic seats leave these None.
     assistant_iss: str | None = None
     assistant_sub: str | None = None
+    # Primitive 4: channel pipeline mode for this seat.
+    # "intentional" (default) = session-scoped, explicit participation.
+    # "ambient" = always-on, VAD-gated, continuous diarization.
+    channel_mode: str = "intentional"
     # SSE event queue — one entry per pending event
     queue: asyncio.Queue = field(default_factory=asyncio.Queue)
     # asyncio loop that owns this seat's queue
@@ -77,6 +81,7 @@ class Seat:
             "user_sub": self.user_sub,
             "assistant_iss": self.assistant_iss,
             "assistant_sub": self.assistant_sub,
+            "channel_mode": self.channel_mode,
         }
         return d
 
@@ -111,6 +116,7 @@ class SeatRegistry:
         # Primitive-2 rename are mapped to user_iss/user_sub transparently.
         iss: str | None = None,
         sub: str | None = None,
+        channel_mode: str = "intentional",
     ) -> Seat:
         """Create a new seat in *session_id*.  Auto-creates the session bucket.
 
@@ -124,6 +130,8 @@ class SeatRegistry:
             assistant_sub: OIDC subject slug for the agent (e.g. "cog").
             iss: Deprecated alias for user_iss (Wave 6b callers).
             sub: Deprecated alias for user_sub (Wave 6b callers).
+            channel_mode: Pipeline mode for this seat. "intentional" (default)
+                or "ambient". Stored on the seat for downstream routing.
         """
         # Merge Wave-6b aliases into the canonical user_* fields.
         resolved_user_iss = user_iss or iss or None
@@ -141,6 +149,7 @@ class SeatRegistry:
             user_sub=resolved_user_sub,
             assistant_iss=assistant_iss,
             assistant_sub=assistant_sub,
+            channel_mode=channel_mode,
         )
         with self._lock:
             if session_id not in self._seats:
@@ -151,10 +160,11 @@ class SeatRegistry:
         else:
             identity_info = ""
         logger.info(
-            "Seat %s registered in session %s (client=%s%s)",
+            "Seat %s registered in session %s (client=%s mode=%s%s)",
             seat_id,
             session_id,
             client_type,
+            channel_mode,
             identity_info,
         )
         return seat

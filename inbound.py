@@ -26,6 +26,7 @@ import numpy as np
 
 from bus import ModalityBus
 from capture import AudioCapture
+from pipeline_graph import ChannelMode, compose_stages, resolve_pipeline
 from pipeline_state import PipelineState
 from server import emit_channel_event, emit_permission_verdict
 from vad import VADResult, detect_speech
@@ -64,6 +65,8 @@ class InboundPipeline:
         loop_sleep_sec: float = 0.05,
         bargein_registry=None,
         use_smart_turn: bool | None = None,
+        mode: ChannelMode | str = ChannelMode.INTENTIONAL,
+        pipeline_stages: list[str] | None = None,
     ):
         self._bus = bus
         self._pipeline_state = pipeline_state
@@ -109,6 +112,31 @@ class InboundPipeline:
             use_smart_turn = os.environ.get("MOD3_SMART_TURN", "").strip() in ("1", "true", "yes")
         self._use_smart_turn = use_smart_turn
         self._smart_turn_detector = None  # Lazily initialised in start()
+
+        # Primitive 4: composable pipeline graph.
+        # Resolve the canonical mode (normalise string → ChannelMode).
+        if isinstance(mode, str):
+            try:
+                mode = ChannelMode(mode)
+            except ValueError:
+                logger.warning(
+                    "InboundPipeline: unknown mode %r; defaulting to INTENTIONAL",
+                    mode,
+                )
+                mode = ChannelMode.INTENTIONAL
+        self._channel_mode: ChannelMode = mode
+        # Resolve the ordered stage name list (caller override or mode default).
+        self._pipeline_stage_names: list[str] = resolve_pipeline(mode, pipeline_stages)
+        # Compose instantiated stages. Unregistered stage names are skipped
+        # with a warning so ambient mode is safe before all stages land.
+        self._composed_stages: list[object] = compose_stages(self._pipeline_stage_names)
+        logger.debug(
+            "InboundPipeline: mode=%s stages=%s composed=%d/%d",
+            self._channel_mode.value,
+            self._pipeline_stage_names,
+            len(self._composed_stages),
+            len(self._pipeline_stage_names),
+        )
 
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()

@@ -1414,6 +1414,8 @@ async def seat_register(session_id: str, request: Request):
     # Wave 6c / Primitive 2: agent identity for agentic harnesses (Claude Code, Cursor)
     assistant_iss: str | None = body.get("assistant_iss") or None
     assistant_sub: str | None = body.get("assistant_sub") or None
+    # Primitive 4: channel pipeline mode — optional; absent = intentional (default)
+    channel_mode: str = body.get("channel_mode") or "intentional"
 
     # Optional: enforce access policy from access.py if available
     try:
@@ -1454,8 +1456,9 @@ async def seat_register(session_id: str, request: Request):
         user_sub=user_sub,
         assistant_iss=assistant_iss,
         assistant_sub=assistant_sub,
+        channel_mode=channel_mode,
     )
-    logger.info("Seat registered: %s in session %s", seat.seat_id, session_id)
+    logger.info("Seat registered: %s in session %s (mode=%s)", seat.seat_id, session_id, channel_mode)
 
     # Emit presence.started when any identity claim is present.
     #
@@ -1504,6 +1507,7 @@ async def seat_register(session_id: str, request: Request):
         "seat_id": seat.seat_id,
         "session_id": seat.session_id,
         "client_type": seat.client_type,
+        "channel_mode": seat.channel_mode,
         **identity_resp,
     }
 
