@@ -231,9 +231,15 @@ class AcpTransport {
   _handleNotification(msg) {
     if (msg.method === 'session/update') {
       const params = msg.params || {};
-      const updateKind = params.sessionUpdate;
+      // Spec-compliant shape per [[reference/acp-protocol-spec]] (schema.json
+      // SessionNotification): params = {sessionId, update: {sessionUpdate, content}}.
+      // The update payload is nested under params.update, not flat in params.
+      // This was a wire-shape divergence in mod3 prior to 2026-05-19 — both
+      // server (notifications.py) and this parser now use the on-spec nested form.
+      const update = params.update || {};
+      const updateKind = update.sessionUpdate;
       if (updateKind === 'agent_message_chunk') {
-        const content = params.content;
+        const content = update.content;
         if (content && content.type === 'text' && this.onAgentChunk) {
           this.onAgentChunk(content.text || '');
         }
@@ -336,10 +342,12 @@ if (typeof module !== 'undefined' && typeof require !== 'undefined' && require.m
     assert.strictEqual(promptMsg.method, 'session/prompt');
     assert.strictEqual(promptMsg.params.sessionId, 'mod3-test123');
     assert.deepStrictEqual(promptMsg.params.prompt, [{ type: 'text', text: 'Hello?' }]);
-    // Inject streaming chunk.
+    // Inject streaming chunk — spec-compliant nested shape per
+    // [[reference/acp-protocol-spec]] (schema.json SessionNotification):
+    // params = {sessionId, update: {sessionUpdate, content}}.
     mockWs.inject({
       jsonrpc: '2.0', method: 'session/update',
-      params: { sessionId: 'mod3-test123', sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Hi there ' } },
+      params: { sessionId: 'mod3-test123', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Hi there ' } } },
     });
     // Inject final response.
     mockWs.inject({ jsonrpc: '2.0', id: promptMsg.id, result: { stopReason: 'end_turn' } });
