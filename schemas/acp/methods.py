@@ -8,8 +8,12 @@ Methods implemented:
   session/new       — create a new session
   session/prompt    — submit a user prompt and stream the response
   session/cancel    — cancel an in-flight prompt (notification, no response)
+  session/list      — list available sessions (optional; requires sessionCapabilities.list)
+  session/load      — retrieve state of a specific session (optional; requires loadSession)
+  session/resume    — reconnect to an existing session (optional; requires sessionCapabilities.resume)
+  authenticate      — auth handshake; no-op when authMethods is empty
 
-Reference: https://github.com/zed-industries/agent-client-protocol
+Reference: https://github.com/agentclientprotocol/agent-client-protocol
 """
 
 from __future__ import annotations
@@ -69,11 +73,24 @@ class PromptCapabilities(_Base):
     embeddedContext: bool = False
 
 
+class SessionCapabilities(_Base):
+    """Session-level capabilities the agent declares.
+
+    Gating flags for optional session methods:
+      list   — agent supports ``session/list``
+      resume — agent supports ``session/resume``
+    """
+
+    list: bool = False
+    resume: bool = False
+
+
 class AgentCapabilities(_Base):
     """Capabilities the agent declares to the client."""
 
     promptCapabilities: PromptCapabilities = Field(default_factory=PromptCapabilities)
-    sessionCapabilities: dict[str, Any] = Field(default_factory=dict)
+    sessionCapabilities: SessionCapabilities = Field(default_factory=SessionCapabilities)
+    loadSession: bool = False
 
 
 class AgentInfo(_Base):
@@ -202,17 +219,169 @@ class SessionCancelParams(_Base):
     sessionId: str
 
 
+# ---------------------------------------------------------------------------
+# session/list  (optional — requires sessionCapabilities.list: true)
+# ---------------------------------------------------------------------------
+
+
+class SessionListParams(_Base):
+    """Parameters for the ``session/list`` request.
+
+    No required fields; the spec does not define filter parameters.
+
+    Wire shape::
+
+        {}
+    """
+
+
+class SessionListItem(_Base):
+    """Metadata for a single session in the ``session/list`` response.
+
+    Wire shape::
+
+        {
+          "sessionId": "default",
+          "state": "idle",
+          "participantId": "chaz",
+          "participantType": "human"
+        }
+    """
+
+    sessionId: str
+    state: str = "idle"
+    participantId: str = ""
+    participantType: str = ""
+
+
+class SessionListResult(_Base):
+    """Result returned by the ``session/list`` method.
+
+    Wire shape::
+
+        {"sessions": [{...}, ...]}
+    """
+
+    sessions: list[SessionListItem] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# session/load  (optional — requires loadSession: true)
+# ---------------------------------------------------------------------------
+
+
+class SessionLoadParams(_Base):
+    """Parameters for the ``session/load`` request.
+
+    Wire shape::
+
+        {"sessionId": "default"}
+    """
+
+    sessionId: str
+
+
+class SessionLoadResult(_Base):
+    """Result returned by the ``session/load`` method.
+
+    Wire shape::
+
+        {
+          "sessionId": "default",
+          "state": {
+            "state": "idle",
+            "participantId": "chaz",
+            ...
+          }
+        }
+    """
+
+    sessionId: str
+    state: dict[str, Any] = Field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# session/resume  (optional — requires sessionCapabilities.resume: true)
+# ---------------------------------------------------------------------------
+
+
+class SessionResumeParams(_Base):
+    """Parameters for the ``session/resume`` request.
+
+    Wire shape::
+
+        {"sessionId": "default"}
+    """
+
+    sessionId: str
+
+
+class SessionResumeResult(_Base):
+    """Result returned by the ``session/resume`` method.
+
+    Wire shape::
+
+        {"sessionId": "default"}
+
+    On success the ACP session is bound to the named mod3 session_id so
+    subsequent ``session/prompt`` calls fan to seats in that session.
+    """
+
+    sessionId: str
+
+
+# ---------------------------------------------------------------------------
+# authenticate  (called by client when authMethods is non-empty)
+# ---------------------------------------------------------------------------
+
+
+class AuthenticateParams(_Base):
+    """Parameters for the ``authenticate`` request.
+
+    ``methodId`` names the auth method the client selected from the
+    ``authMethods`` list returned by ``initialize``.  When ``authMethods``
+    is ``[]`` mod3 returns an immediate success and never calls this method.
+
+    Wire shape::
+
+        {"methodId": ""}
+    """
+
+    methodId: str = ""
+
+
+class AuthenticateResult(_Base):
+    """Result returned by the ``authenticate`` method.
+
+    Wire shape::
+
+        {"success": true}
+    """
+
+    success: bool = True
+
+
 __all__ = [
     "AgentCapabilities",
+    "AuthenticateParams",
+    "AuthenticateResult",
     "ClientCapabilities",
     "ClientInfo",
     "InitializeParams",
     "InitializeResult",
     "McpServer",
     "PromptCapabilities",
+    "SessionCapabilities",
     "SessionCancelParams",
+    "SessionListItem",
+    "SessionListParams",
+    "SessionListResult",
+    "SessionLoadParams",
+    "SessionLoadResult",
     "SessionNewParams",
     "SessionNewResult",
     "SessionPromptParams",
     "SessionPromptResult",
+    "SessionResumeParams",
+    "SessionResumeResult",
 ]

@@ -3,9 +3,9 @@
 ACP is the Agent Client Protocol — JSON-RPC 2.0 over WebSocket.
 Spec: https://github.com/agentclientprotocol/agent-client-protocol
 
-This package exposes the minimum viable subset needed to implement
-the /ws/acp endpoint in mod3: initialization, session lifecycle,
-prompt submission, streaming responses, and error handling.
+This package exposes the subset needed to implement the /ws/acp endpoint in
+mod3: initialization, session lifecycle, prompt submission, streaming
+responses, session management, authentication, and error handling.
 
 Public surface
 --------------
@@ -16,7 +16,11 @@ From ``methods``:
     InitializeParams, InitializeResult,
     SessionNewParams, SessionNewResult,
     SessionPromptParams, SessionPromptResult,
-    SessionCancelParams
+    SessionCancelParams,
+    SessionListParams, SessionListResult, SessionListItem,
+    SessionLoadParams, SessionLoadResult,
+    SessionResumeParams, SessionResumeResult,
+    AuthenticateParams, AuthenticateResult
 
 From ``notifications``:
     SessionUpdateNotification, SessionUpdateParams, SessionUpdatePayload
@@ -49,14 +53,24 @@ from .envelope import (
 )
 from .methods import (
     AgentCapabilities,
+    AuthenticateParams,
+    AuthenticateResult,
     InitializeParams,
     InitializeResult,
     PromptCapabilities,
+    SessionCapabilities,
     SessionCancelParams,
+    SessionListItem,
+    SessionListParams,
+    SessionListResult,
+    SessionLoadParams,
+    SessionLoadResult,
     SessionNewParams,
     SessionNewResult,
     SessionPromptParams,
     SessionPromptResult,
+    SessionResumeParams,
+    SessionResumeResult,
 )
 from .notifications import SessionUpdateNotification, SessionUpdateParams, SessionUpdatePayload
 
@@ -66,16 +80,28 @@ __all__ = [
     "JsonRpcNotification",
     "JsonRpcRequest",
     "JsonRpcResponse",
-    # methods
+    # methods — baseline
     "AgentCapabilities",
     "InitializeParams",
     "InitializeResult",
     "PromptCapabilities",
+    "SessionCapabilities",
     "SessionCancelParams",
     "SessionNewParams",
     "SessionNewResult",
     "SessionPromptParams",
     "SessionPromptResult",
+    # methods — optional session management
+    "SessionListItem",
+    "SessionListParams",
+    "SessionListResult",
+    "SessionLoadParams",
+    "SessionLoadResult",
+    "SessionResumeParams",
+    "SessionResumeResult",
+    # methods — auth
+    "AuthenticateParams",
+    "AuthenticateResult",
     # notifications
     "SessionUpdateNotification",
     "SessionUpdateParams",
