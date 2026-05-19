@@ -176,6 +176,7 @@ class TestSessionRegisterRequest:
             sub="cog",
         )
         import json
+
         d = json.loads(req.model_dump_json())
         assert d["iss"] == "cogos-dev"
         assert d["sub"] == "cog"

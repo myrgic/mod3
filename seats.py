@@ -128,7 +128,10 @@ class SeatRegistry:
         identity_info = f" iss={iss!r} sub={sub!r}" if iss or sub else ""
         logger.info(
             "Seat %s registered in session %s (client=%s%s)",
-            seat_id, session_id, client_type, identity_info,
+            seat_id,
+            session_id,
+            client_type,
+            identity_info,
         )
         return seat
 

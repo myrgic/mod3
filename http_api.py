@@ -1473,7 +1473,10 @@ async def seat_register(session_id: str, request: Request):
         registry.fan_out_all(presence_event)
         logger.info(
             "presence.started emitted: iss=%r sub=%r seat=%s session=%s",
-            iss, sub, seat.seat_id, session_id,
+            iss,
+            sub,
+            seat.seat_id,
+            session_id,
         )
 
     return {
