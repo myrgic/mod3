@@ -1407,6 +1407,9 @@ async def seat_register(session_id: str, request: Request):
 
     client_type = body.get("client_type", "generic")
     device_uuid = body.get("device_uuid", "")
+    # Identity claims (Wave 6b) — optional; absent = unattributed seat
+    iss: str | None = body.get("iss") or None
+    sub: str | None = body.get("sub") or None
 
     # Optional: enforce access policy from access.py if available
     try:
@@ -1443,12 +1446,44 @@ async def seat_register(session_id: str, request: Request):
         session_id=session_id,
         client_type=client_type,
         device_uuid=device_uuid,
+        iss=iss,
+        sub=sub,
     )
     logger.info("Seat registered: %s in session %s", seat.seat_id, session_id)
+
+    # Wave 6b: emit presence.started when identity claims are present.
+    #
+    # Shape: { type, iss, sub, session_id, seat_id, harness_session_id }
+    # harness_session_id: the Claude Code session ID that registered this seat,
+    # carried as device_uuid by convention (the channel client sets it).
+    #
+    # Fan-out to ALL sessions so the dashboard and any listening reconciler
+    # can see the event. The kernel reconciler integration is a follow-up
+    # (Wave 6c / ChannelProvider); this wave ensures the event shape is correct
+    # and the emission path works end-to-end.
+    if iss or sub:
+        presence_event: dict = {
+            "type": "presence.started",
+            "iss": iss,
+            "sub": sub,
+            "session_id": session_id,
+            "seat_id": seat.seat_id,
+            "harness_session_id": device_uuid or None,
+        }
+        registry.fan_out_all(presence_event)
+        logger.info(
+            "presence.started emitted: iss=%r sub=%r seat=%s session=%s",
+            iss,
+            sub,
+            seat.seat_id,
+            session_id,
+        )
+
     return {
         "seat_id": seat.seat_id,
         "session_id": seat.session_id,
         "client_type": seat.client_type,
+        **({"iss": iss, "sub": sub} if iss or sub else {}),
     }
 
 
