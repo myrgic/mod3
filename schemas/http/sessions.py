@@ -15,19 +15,31 @@ class SessionRegisterRequest(_Base):
     """POST /v1/sessions/register — register a session with the Mod3 communication bus.
 
     Identity claims (Wave 6b / ADR-082):
-        iss: OIDC issuer for the principal registering this session.
+        iss: OIDC issuer for the user identity registering this session.
              Typically the CogOS kernel issuer (e.g. "cogos-dev").
-        sub: OIDC subject — the stable identity slug (e.g. "chaz", "cog").
+        sub: OIDC subject — the user identity slug (e.g. "chaz").
 
         Both fields are optional. When absent, the seat is treated as an
         unattributed seat (backward-compatible with pre-Wave-6b callers).
         When present, mod3 emits a ``presence.started`` event so the kernel
         reconciler can update the seat's identity binding.
 
-        Agentic sessions (Claude Code, Cursor) bind two identities simultaneously:
-            participant_id  → user identity (human operator)
-            iss + sub       → agent identity (LLM-shaped substrate entity)
-        This is the multi-identity harness shape per feedback_agentic_harness_multi_identity.
+    Multi-identity harness binding (Wave 6c / Primitive 2):
+        Agentic harnesses (Claude Code, Cursor) bind TWO identities simultaneously:
+            iss / sub             → user identity (human operator, e.g. "chaz")
+            assistant_iss / sub   → agent identity (LLM entity, e.g. "cog")
+
+        This makes agentic harnesses first-class on the substrate. The
+        ``participant_id`` field remains the human-readable user slug for
+        backward compatibility.
+
+        Trust model (v1): identity claims are accepted at face value from the
+        registering process. The launch context (stdio child of a CogOS-managed
+        kernel process) is the implicit attestation; no cryptographic verification
+        is performed here. The ``HarnessBindingCRD`` record written on
+        ``presence.started`` is the substrate-readable audit trail. Cryptographic
+        enforcement (kernel-signed tokens, pre-check against ratified
+        ``HarnessBinding`` records) is v2 work.
     """
 
     session_id: str
@@ -36,9 +48,15 @@ class SessionRegisterRequest(_Base):
     preferred_voice: str | None = Field(default=None)
     preferred_output_device: str = Field(default="system-default")
     priority: int = Field(default=0)
-    # Identity claims (Wave 6b) — optional, backward compatible
-    iss: str | None = Field(default=None, description="OIDC issuer for the registering identity")
-    sub: str | None = Field(default=None, description="OIDC subject slug (e.g. 'cog', 'chaz')")
+    # Wave 6b: user identity OIDC claims — optional, backward compatible
+    iss: str | None = Field(default=None, description="OIDC issuer for the user identity")
+    sub: str | None = Field(default=None, description="OIDC subject slug for user identity (e.g. 'chaz')")
+    # Wave 6c / Primitive 2: agent identity claims (agentic harnesses only)
+    # When set, this seat is bound to BOTH the user identity (iss/sub) and the
+    # agent identity (assistant_iss/assistant_sub). Non-agentic clients leave
+    # these None.
+    assistant_iss: str | None = Field(default=None, description="OIDC issuer for agent identity")
+    assistant_sub: str | None = Field(default=None, description="OIDC subject slug for agent identity (e.g. 'cog')")
 
 
 class SessionSubscribersResponse(_Base):
