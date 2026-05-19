@@ -107,7 +107,6 @@ class TestAcpSessionList:
 
     def test_session_list_includes_registered_session(self, client):
         """A session registered in the TTS registry should appear in session/list."""
-        from session_registry import SessionRegistry
 
         # Build a minimal mock registry with one session
         mock_session = {
