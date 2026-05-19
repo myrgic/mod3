@@ -10,9 +10,18 @@ from typing import List, Optional
 # ---------------------------------------------------------------------------
 # This is the on-disk metadata record for a cloned voice stored in the mod3
 # voice registry at ~/.mod3/voices/<name>.{safetensors,json}.
-# Paired with VoiceGenerativeHead / VoiceDiscriminativeHead (below) which are
-# the schema representations of the identity-level voice config that arrives
-# via the CogOS identity projection.
+#
+# IMPORTANT — spec vs. asset distinction:
+#   VoiceProfile (this class) is the ASSET record. It describes a physical
+#   voice clone stored on disk: sha256, safetensors path, engine, curation
+#   metadata. One record per cloned voice in the registry.
+#
+#   IdentityVoiceProfile (below) is the SPEC record. It carries voice config
+#   received from the CogOS kernel via an identity-projection event and says
+#   which asset to use for a given identity. It holds URIs, not file paths.
+#
+# The naming collision between VoiceProfile and IdentityVoiceProfile is a
+# known issue tracked in mod3#93; a rename pass will follow in a later wave.
 # ---------------------------------------------------------------------------
 
 
@@ -70,7 +79,18 @@ class VoiceProfile:
 # These dataclasses mirror the VoiceGenerativeHead / VoiceDiscriminativeHead /
 # VoiceProfile structs from cogos identity_crd.go and are used when mod3
 # receives voice config from the CogOS kernel via identity projection events.
-# They are distinct from the registry-level VoiceProfile above.
+#
+# IMPORTANT — spec vs. asset distinction:
+#   IdentityVoiceProfile (this class cluster) is the SPEC: it arrives from the
+#   kernel as a declaration of which voice an identity should use. It carries
+#   cog://voices/* URIs that the resolver maps to the registry at runtime.
+#
+#   VoiceProfile (above) is the ASSET: the physical on-disk clone record that
+#   the URI resolves to. Do not conflate them; they are populated from different
+#   sources (kernel event vs. local registry I/O) and have different lifecycles.
+#
+# Rename tracking: mod3#93. The class names are deliberately asymmetric until
+# that rename lands.
 # ---------------------------------------------------------------------------
 
 
