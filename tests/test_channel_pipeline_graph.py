@@ -30,14 +30,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 # ---------------------------------------------------------------------------
 
 from pipeline_graph import (  # noqa: E402
-    ChannelMode,
     DEFAULT_PIPELINES,
     STAGE_REGISTRY,
+    ChannelMode,
     compose_stages,
     register_stage,
     resolve_pipeline,
 )
-
 
 # ---------------------------------------------------------------------------
 # ChannelMode
