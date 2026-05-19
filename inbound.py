@@ -10,6 +10,22 @@ Reflex arc: if TTS is playing when the user speaks, the pipeline calls
 PipelineState.interrupt() to flush playback within ~50ms — no LLM
 round-trip needed.
 
+Composable stage graph (Primitive 4):
+  The four intentional-mode stages are registered here via @register_stage.
+  Each stage implements:
+    - configure(pipeline) — called once after compose_stages(), binds the
+      InboundPipeline instance so stages can reach mic state, bus, etc.
+    - process(ctx) — called per-tick with a shared state dict; returns ctx
+      to continue or None to halt the pipeline for this tick.
+
+  Tick context dict keys:
+    chunk        np.ndarray   initial audio chunk that triggered VAD onset
+    vad_result   VADResult    result from the initial VAD pre-check
+    utterance    np.ndarray   accumulated utterance (populated by STTStage)
+    final_vad    VADResult    last VAD result after accumulation
+    audio_bytes  bytes        float32 pcm bytes of the utterance
+    event        CognitiveEvent | None  STT result from bus.perceive()
+
 No side effects on import.
 """
 
@@ -26,7 +42,7 @@ import numpy as np
 
 from bus import ModalityBus
 from capture import AudioCapture
-from pipeline_graph import ChannelMode, compose_stages, resolve_pipeline
+from pipeline_graph import ChannelMode, compose_stages, register_stage, resolve_pipeline
 from pipeline_state import PipelineState
 from server import emit_channel_event, emit_permission_verdict
 from vad import VADResult, detect_speech
@@ -36,6 +52,191 @@ from vad import VADResult, detect_speech
 PERMISSION_VERDICT_RE = re.compile(r"^\s*(y|yes|n|no)\s+([a-km-z]{5})\s*$", re.IGNORECASE)
 
 logger = logging.getLogger("mod3.inbound")
+
+
+# ---------------------------------------------------------------------------
+# Intentional-mode stage classes
+# ---------------------------------------------------------------------------
+#
+# Each stage:
+#   - Has a no-arg constructor (required by compose_stages()).
+#   - Implements configure(pipeline) to bind the InboundPipeline instance.
+#   - Implements process(ctx) where ctx is a per-tick state dict.
+#     Returns ctx to continue or None to halt the pipeline for this tick.
+#
+# Tick context dict keys (see module docstring for full spec).
+# ---------------------------------------------------------------------------
+
+
+@register_stage("denoise")
+class DenoiseStage:
+    """Denoise stage — currently a pass-through.
+
+    No denoise model is wired today. The stage is registered so that the
+    intentional-mode pipeline composes cleanly and the registry slot is
+    claimed for the follow-on denoising implementation.
+    """
+
+    def configure(self, pipeline: "InboundPipeline") -> None:
+        self._pipeline = pipeline
+
+    def process(self, ctx: dict) -> dict | None:
+        # Pass audio through unchanged.
+        return ctx
+
+
+@register_stage("vad")
+class VADStage:
+    """Voice Activity Detection stage.
+
+    Runs Silero VAD on the incoming audio chunk. If no speech is detected,
+    halts the pipeline for this tick (returns None). On speech detection:
+      - Fires the TTS reflex arc (interrupt if playing).
+      - Emits RTVI user-started-speaking signal.
+      - Dispatches a barge-in start event to the BargeinRegistry (if wired).
+
+    Sets ctx['vad_result'] (initial VADResult from this chunk).
+    """
+
+    def configure(self, pipeline: "InboundPipeline") -> None:
+        self._pipeline = pipeline
+
+    def process(self, ctx: dict) -> dict | None:
+        p = self._pipeline
+        chunk = ctx["chunk"]
+
+        vad_result = detect_speech(
+            chunk,
+            sample_rate=p._sample_rate,
+            threshold=p._vad_threshold,
+        )
+
+        if not vad_result.has_speech:
+            p._stop_event.wait(p._loop_sleep_sec)
+            return None
+
+        ctx["vad_result"] = vad_result
+
+        # Reflex arc: interrupt TTS if speaking.
+        if p._pipeline_state.is_speaking:
+            interrupt_info = p._pipeline_state.interrupt("vad_reflex")
+            if interrupt_info is not None:
+                logger.info(
+                    "reflex interrupt: spoken_pct=%.1f%% reason=%s",
+                    interrupt_info.spoken_pct * 100,
+                    interrupt_info.reason,
+                )
+
+        # RTVI T4 — user-started-speaking signal on VAD onset.
+        # TODO(T4): InboundPipeline has no session_id; using "default" fallback.
+        # Wire a real session_id when the pipeline is session-scoped.
+        try:
+            from audio_subscribers import get_default_audio_subscribers as _get_subs
+
+            _get_subs().emit_user_started_speaking("default")
+        except Exception:
+            pass  # best-effort; never block the VAD path
+
+        # Dispatch barge-in start event to the registry (if wired).
+        if p._bargein_registry is not None:
+            try:
+                from bargein.providers.base import BargeinEvent
+
+                p._bargein_registry._dispatch(
+                    BargeinEvent(
+                        source="mic_vad",
+                        event_type="user_speaking_start",
+                        metadata={"speech_ratio": round(vad_result.speech_ratio, 2)},
+                    )
+                )
+            except Exception:
+                logger.exception("failed to dispatch barge-in event from inbound pipeline")
+
+        return ctx
+
+
+@register_stage("stt")
+class STTStage:
+    """Speech-to-text stage.
+
+    Accumulates audio until the utterance boundary (silence window), then
+    runs the complete utterance through ModalityBus.perceive() (Gate →
+    Whisper → BoH). Emits RTVI user-stopped-speaking on boundary detection.
+
+    Reads ctx['chunk'] and ctx['vad_result'] (set by VADStage).
+    Sets ctx['utterance'], ctx['final_vad'], ctx['audio_bytes'], ctx['event'].
+    Returns None if the pipeline was stopped during accumulation or the bus
+    gate rejected / filtered the utterance.
+    """
+
+    def configure(self, pipeline: "InboundPipeline") -> None:
+        self._pipeline = pipeline
+
+    def process(self, ctx: dict) -> dict | None:
+        p = self._pipeline
+
+        utterance, final_vad = p._accumulate_utterance(ctx["chunk"], ctx["vad_result"])
+        if utterance is None:
+            return None
+
+        ctx["utterance"] = utterance
+        ctx["final_vad"] = final_vad
+
+        # RTVI T4 — user-stopped-speaking at utterance boundary.
+        try:
+            from audio_subscribers import get_default_audio_subscribers as _get_subs
+
+            _get_subs().emit_user_stopped_speaking("default")
+        except Exception:
+            pass  # best-effort
+
+        audio_bytes = utterance.astype(np.float32).tobytes()
+        ctx["audio_bytes"] = audio_bytes
+
+        event = p._bus.perceive(
+            audio_bytes,
+            modality="voice",
+            channel="mod3-voice",
+        )
+
+        if event is None:
+            logger.debug("utterance filtered by bus pipeline")
+            return None
+
+        ctx["event"] = event
+        return ctx
+
+
+@register_stage("emit")
+class EmitStage:
+    """Emit stage — delivers the transcript to Claude Code.
+
+    Logs the transcript, calls _emit_notification(), and fires the RTVI
+    user-transcription signal.
+
+    Reads ctx['event'] and ctx['final_vad'] (set by STTStage).
+    """
+
+    def configure(self, pipeline: "InboundPipeline") -> None:
+        self._pipeline = pipeline
+
+    def process(self, ctx: dict) -> dict | None:
+        p = self._pipeline
+        event = ctx["event"]
+        final_vad = ctx["final_vad"]
+
+        logger.info("transcript: %s (confidence=%.2f)", event.content[:80], event.confidence)
+        p._emit_notification(event, final_vad)
+
+        # RTVI T4 — user-transcription on successful STT result.
+        try:
+            from audio_subscribers import get_default_audio_subscribers as _get_subs
+
+            _get_subs().emit_user_transcription("default", event.content, is_final=True)
+        except Exception:
+            pass  # best-effort; channel notification above is the primary path
+
+        return ctx
 
 
 class InboundPipeline:
@@ -130,6 +331,11 @@ class InboundPipeline:
         # Compose instantiated stages. Unregistered stage names are skipped
         # with a warning so ambient mode is safe before all stages land.
         self._composed_stages: list[object] = compose_stages(self._pipeline_stage_names)
+        # Configure each stage with a back-reference to this pipeline so
+        # stages can access sample_rate, bus, pipeline_state, etc.
+        for stage in self._composed_stages:
+            if hasattr(stage, "configure"):
+                stage.configure(self)
         logger.debug(
             "InboundPipeline: mode=%s stages=%s composed=%d/%d",
             self._channel_mode.value,
@@ -220,7 +426,17 @@ class InboundPipeline:
         logger.debug("listen loop exited")
 
     def _tick(self) -> None:
-        """Single iteration of the listen loop."""
+        """Single iteration of the listen loop.
+
+        When the composed pipeline is fully wired (all declared stage names
+        have registered implementations), frames are driven through
+        _composed_stages via the stage graph. Each stage receives the shared
+        tick-context dict and returns it to continue or None to halt.
+
+        When the pipeline is partially wired (some stages unregistered, e.g.
+        ambient mode before diarize/ecapa_match land), the legacy inline path
+        runs instead so behaviour is never silently degraded.
+        """
 
         # 1. Grab a chunk of audio from the ring buffer
         chunk = self._capture.get_audio(self._chunk_sec)
@@ -229,6 +445,28 @@ class InboundPipeline:
             self._stop_event.wait(self._loop_sleep_sec)
             return
 
+        # Route through the composed stage graph when fully wired.
+        if len(self._composed_stages) == len(self._pipeline_stage_names):
+            self._tick_composed(chunk)
+        else:
+            self._tick_inline(chunk)
+
+    def _tick_composed(self, chunk) -> None:
+        """Drive the tick through the fully-wired composed stage graph."""
+        ctx: dict = {"chunk": chunk}
+        for stage in self._composed_stages:
+            ctx = stage.process(ctx)
+            if ctx is None:
+                return
+
+    def _tick_inline(self, chunk) -> None:
+        """Legacy inline pipeline — used when the composed graph is partially wired.
+
+        Preserves the original inbound logic exactly for partial-pipeline cases
+        (e.g. ambient mode before all stages are registered). No behaviour
+        difference from the original _tick(); only the chunk pre-fetch has been
+        moved to the caller (_tick).
+        """
         # 2. Fast VAD pre-check (Silero, no Whisper)
         vad_result = detect_speech(
             chunk,
