@@ -39,6 +39,7 @@ from identity_projection_handler import (  # noqa: E402
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _full_vp_payload(sub: str = "cog") -> dict:
     """A well-formed identity.projected payload WITH voice_profile embedded."""
     return {
@@ -104,6 +105,7 @@ class TestHandleIdentityEventWithVoiceProfile:
     def test_generative_uri_resolved(self):
         """resolve_voices_uri(cog://voices/cog) → …/voices/cog.safetensors."""
         import pathlib
+
         cache = IdentityVoiceCache()
         handle_identity_event(_full_vp_payload(), cache)
         result = cache.get("cog")
@@ -115,6 +117,7 @@ class TestHandleIdentityEventWithVoiceProfile:
     def test_discriminative_uri_resolved(self):
         """resolve_voices_uri(cog://voices/cog/ecapa-embedding) → ….ecapa.npy."""
         import pathlib
+
         cache = IdentityVoiceCache()
         handle_identity_event(_full_vp_payload(), cache)
         result = cache.get("cog")
@@ -127,8 +130,7 @@ class TestHandleIdentityEventWithVoiceProfile:
         with caplog.at_level(logging.INFO, logger="mod3.identity_projection"):
             handle_identity_event(_full_vp_payload(), cache)
         assert any(
-            "resolved voice profile" in record.message and "cog" in record.message
-            for record in caplog.records
+            "resolved voice profile" in record.message and "cog" in record.message for record in caplog.records
         ), f"Expected info log; got: {[r.message for r in caplog.records]}"
 
     def test_debug_log_on_re_resolution(self, caplog):
@@ -140,10 +142,7 @@ class TestHandleIdentityEventWithVoiceProfile:
             handle_identity_event(_full_vp_payload(), cache)
         # Should have a debug re-resolved log, no second info log.
         assert any("re-resolved" in r.message for r in caplog.records)
-        assert not any(
-            r.levelno == logging.INFO and "resolved voice profile" in r.message
-            for r in caplog.records
-        )
+        assert not any(r.levelno == logging.INFO and "resolved voice profile" in r.message for r in caplog.records)
 
 
 class TestHandleIdentityEventNoVoiceProfile:
@@ -421,4 +420,5 @@ def test_engine_resolve_model_accepts_cog_uri_when_profile_in_registry():
 
 if __name__ == "__main__":
     import sys
+
     sys.exit(pytest.main([__file__, "-v"]))

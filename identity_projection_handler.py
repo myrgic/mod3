@@ -60,9 +60,7 @@ IDENTITY_KIND_PROJECTED = "identity.projected"
 IDENTITY_KIND_EXPRESSION_UPDATED = "identity.expression.updated"
 
 # Both kinds carry the same payload shape and get the same handler logic.
-IDENTITY_KINDS: frozenset[str] = frozenset(
-    {IDENTITY_KIND_PROJECTED, IDENTITY_KIND_EXPRESSION_UPDATED}
-)
+IDENTITY_KINDS: frozenset[str] = frozenset({IDENTITY_KIND_PROJECTED, IDENTITY_KIND_EXPRESSION_UPDATED})
 
 
 @dataclass
@@ -227,8 +225,7 @@ def handle_identity_event(payload: dict, cache: IdentityVoiceCache) -> None:
 
     if is_first_time:
         logger.info(
-            "identity-bridge: resolved voice profile for sub=%r "
-            "engine=%s generative_path=%s",
+            "identity-bridge: resolved voice profile for sub=%r engine=%s generative_path=%s",
             sub,
             profile.generative.engine if profile.generative else None,
             generative_path,
