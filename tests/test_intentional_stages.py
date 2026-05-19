@@ -22,7 +22,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 from types import ModuleType
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
@@ -389,7 +389,7 @@ class TestEmitStage:
         stage, pipeline, vad_result, event = self._make_stage()
         ctx = {"event": event, "final_vad": vad_result}
 
-        result = stage.process(ctx)
+        stage.process(ctx)
 
         pipeline._emit_notification.assert_called_once_with(event, vad_result)
 
