@@ -117,14 +117,64 @@ def split_sentences(text: str) -> list[str]:
     return [s.strip() for s in sentences if s.strip()]
 
 
-def resolve_model(voice: str) -> tuple[str, str]:
-    """Given a voice name, return (engine_name, voice) or raise.
+def _resolve_voice_uri(uri: str) -> str | None:
+    """Resolve a cog://voices/* URI to a registry profile name, or None.
 
-    Checks the voice profile registry first. If ``voice`` is a registered
-    profile name, returns the profile's parent engine so the chatterbox
-    dispatch branch can load its cached Conditionals.  Falls through to the
-    built-in MODELS voice list when no matching profile exists.
+    When a cog://voices/<name> URI arrives (e.g. from an identity projection),
+    extract the name segment and check whether it is a registered profile in
+    the local voice registry. Returns the bare name if found, None otherwise.
+
+    Only the cog://voices/<name> form (one path segment) maps to a profile name.
+    The sub-path form cog://voices/<name>/ecapa-embedding is a discriminative
+    head reference and does not resolve to a TTS profile.
     """
+    if not (uri.startswith("cog://voices/") or uri.startswith("cog:voices/")):
+        return None
+    # Strip the namespace prefix to get the remainder.
+    for prefix in ("cog://voices/", "cog:voices/"):
+        if uri.startswith(prefix):
+            remainder = uri[len(prefix) :]
+            break
+    else:
+        return None
+
+    # Only bare-name URIs (no sub-path) map to a TTS profile.
+    if "/" in remainder:
+        return None
+
+    name = remainder.strip()
+    if not name:
+        return None
+
+    registry = _get_profile_registry()
+    if registry is not None and registry.get(name) is not None:
+        return name
+    return None
+
+
+def resolve_model(voice: str) -> tuple[str, str]:
+    """Given a voice name or cog://voices/* URI, return (engine_name, voice) or raise.
+
+    Resolution order:
+    1. If voice is a cog://voices/<name> URI, resolve the name via the local
+       voice registry (cog:// URI resolver, Primitive 3). Falls through to the
+       bare name resolution if the URI resolves to a known profile.
+    2. Check the voice profile registry for a registered cloned profile by name.
+    3. Fall through to the built-in MODELS voice list.
+
+    Raises ValueError if no engine can handle the voice.
+    """
+    # Primitive 3: resolve cog://voices/* URIs to profile names
+    if voice.startswith("cog:"):
+        resolved_name = _resolve_voice_uri(voice)
+        if resolved_name is not None:
+            voice = resolved_name
+        else:
+            raise ValueError(
+                f"Unknown voice URI '{voice}': no matching profile in local registry. "
+                "Ensure the voice has been enrolled via the voice enrollment skill."
+            )
+
     registry = _get_profile_registry()
     if registry is not None:
         profile = registry.get(voice)
