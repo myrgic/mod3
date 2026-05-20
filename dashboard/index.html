@@ -974,11 +974,14 @@ window.__renderSessionsSidebar = function(sessions) {
 };
 
 // --- Session sidebar click delegation ---
-// Clicking a session row makes it the "active" session: highlights it in the
-// sidebar and persists the selection in localStorage so refresh restores it.
-// Future: loading that session's chat history into the main pane.
+// Clicking a session row makes it the "active chat target": all outbound sends
+// route to that session, the main chat pane re-renders with that session's
+// history, and the selection persists in localStorage so refresh restores it.
+// The selection is tracked separately from the dashboard's own registered
+// participant identity (mod3.sessionId) — clicking another session does NOT
+// change who this browser tab is on the bus, only what it's sending to.
 (function initSidebarClickDelegation() {
-  const SESSION_KEY = 'mod3.sessionId';
+  const ACTIVE_CHAT_KEY = 'mod3.activeChatSession';
 
   function getContainer() { return document.getElementById('sessions-sidebar-content'); }
 
@@ -990,18 +993,81 @@ window.__renderSessionsSidebar = function(sessions) {
     });
   }
 
+  // Hydrate chat-area with messages from /v1/sessions/<sid>/messages.
+  // Idempotent: clears the existing DOM children, then renders one .msg-* per
+  // entry in order. Hides the "Ready" placeholder if present.
+  async function hydrateChatHistory(sid) {
+    const chatArea = document.getElementById('chat-area');
+    if (!chatArea) return;
+    try {
+      const r = await fetch(`/v1/sessions/${encodeURIComponent(sid)}/messages?limit=500`);
+      if (!r.ok) {
+        console.warn('[history] fetch failed:', r.status, sid);
+        return;
+      }
+      const data = await r.json();
+      const msgs = Array.isArray(data.messages) ? data.messages : [];
+
+      chatArea.innerHTML = '';
+      if (msgs.length === 0) {
+        // Leave the pane empty — the next send will populate it.
+        return;
+      }
+      // appendMessage is defined later in this file (function declaration is
+      // hoisted in module scope but THIS IIFE may run before the script body
+      // does). Use window.appendMessage via late-binding.
+      const append = window.appendMessage || ((role, text) => {
+        const div = document.createElement('div');
+        div.className = `msg msg-${role}`;
+        div.innerHTML = `<div class="msg-role">${role === 'user' ? 'You' : 'AI'}</div><div class="msg-text"></div>`;
+        div.querySelector('.msg-text').textContent = text;
+        chatArea.appendChild(div);
+      });
+      for (const m of msgs) {
+        append(m.role, m.content, m.input_type === 'voice' ? 'voice' : null);
+      }
+      chatArea.scrollTop = chatArea.scrollHeight;
+    } catch (err) {
+      console.warn('[history] fetch threw:', err);
+    }
+  }
+
   function activateRow(row) {
     const sid = row.dataset.sid;
     if (!sid) return;
+    selectSession(sid);
+  }
+
+  // selectSession is the unified entry point used by:
+  //   - sidebar click / keydown (activateRow → selectSession)
+  //   - refresh-time hydration (mod3-session-registered → restore from localStorage)
+  //   - the spawn postMessage bridge (attachToClaudeCodeSession after seat appears)
+  function selectSession(sid) {
+    if (!sid) return;
     setActiveRow(sid);
-    // Persist the user's explicit session choice
+    window.__activeChatSessionId = sid;
+    try { localStorage.setItem(ACTIVE_CHAT_KEY, sid); } catch {}
+
+    // ACP transport rebinding: when the operator has explicitly switched to a
+    // different session, point the ACP connection at it so server-side state
+    // (turn history, capabilities) follows. Best-effort — older transports
+    // without sessionResume continue to broadcast via /v1/sessions/broadcast-message.
     try {
-      const saved = JSON.parse(localStorage.getItem(SESSION_KEY)) || {};
-      localStorage.setItem(SESSION_KEY, JSON.stringify({ ...saved, session_id: sid }));
-    } catch {}
-    // Emit a custom event so other panels can react
+      if (window._acpTransport && typeof window._acpTransport.sessionResume === 'function') {
+        window._acpTransport.sessionResume(sid);
+      }
+    } catch (e) {
+      console.warn('[session-switch] sessionResume threw:', e);
+    }
+
+    hydrateChatHistory(sid);
     document.dispatchEvent(new CustomEvent('mod3:session-selected', { detail: { session_id: sid } }));
   }
+
+  // Expose to the surrounding script: send paths and the spawn bridge read
+  // window.__activeChatSessionId to know where to route.
+  window.__selectChatSession = selectSession;
+  window.__getActiveChatSessionId = () => window.__activeChatSessionId || null;
 
   function wireContainer(container) {
     container.addEventListener('click', e => {
@@ -1816,6 +1882,9 @@ function appendMessage(role, text, source) {
   chatArea.scrollTop = chatArea.scrollHeight;
   return div;
 }
+// Expose so the sidebar click handler (defined earlier in script order) can
+// reuse the same renderer when hydrating history on session-switch / refresh.
+window.appendMessage = appendMessage;
 
 let _currentAssistantMsg = null;
 let _currentAssistantText = '';  // Full text of current response for word tracking
@@ -2011,16 +2080,31 @@ async function sendTextMessage(text) {
   // Parse optional @<session_id> mention address.
   // When present, the message is routed only to the addressed session's seats
   // and the local AgentLoop is skipped (the addressed harness handles it).
-  const { targetSessionId, body: messageBody } = parseMentionAddress(text);
+  const { targetSessionId: mentionTarget, body: messageBody } = parseMentionAddress(text);
 
-  // Always broadcast to channel-client seats (MCP harnesses).  This closes
-  // the dashboard→Claude-Code receive direction: the seat SSE stream delivers
-  // the event to channel_client.py which emits it as notifications/claude/channel.
+  // Resolve the routing target: explicit @-mention wins, then the operator's
+  // active sidebar selection (window.__activeChatSessionId), and only when
+  // neither is set do we fall through to broadcast-all (target=null). The
+  // dashboard's own session is the implicit active session when nothing is
+  // selected, so sends still land somewhere visible.
+  const activeChat = (typeof window.__getActiveChatSessionId === 'function')
+    ? window.__getActiveChatSessionId()
+    : null;
+  const targetSessionId = mentionTarget || activeChat || null;
+
+  // Broadcast to channel-client seats (MCP harnesses).  This closes the
+  // dashboard→Claude-Code receive direction: the seat SSE stream delivers the
+  // event to channel_client.py which emits it as notifications/claude/channel.
   broadcastToChannelSeats(messageBody, targetSessionId);
 
-  // When the message is @-addressed to a specific harness, skip the local
-  // AgentLoop — the addressed Claude Code session owns the response.
-  if (targetSessionId) return;
+  // When the message is addressed to a harness OTHER than the dashboard's own
+  // session (either via @-mention or via an explicit sidebar selection), skip
+  // the local AgentLoop — that session's channel client owns the response.
+  // When the operator's active session IS the dashboard's own session (the
+  // default), fall through to the local backend so the dashboard still has
+  // an agent to talk to without a Claude Code harness attached.
+  const ownSid = window.__mod3Session && window.__mod3Session.session_id;
+  if (targetSessionId && targetSessionId !== ownSid) return;
 
   // Transport selection: URL param wins, else localStorage (mod3.transport), else /ws/chat.
   // getTransportPref() is defined in the settings block above.
@@ -2197,6 +2281,27 @@ chatInput.addEventListener('input', () => {
     window.dispatchEvent(new CustomEvent('mod3-session-registered', {
       detail: window.__mod3Session,
     }));
+
+    // Restore the active chat session and rehydrate the chat pane. If the
+    // operator had previously selected a different session in the sidebar
+    // we honor that selection across refreshes; otherwise default to the
+    // dashboard's own session_id so outbound sends still have a target.
+    try {
+      const ACTIVE_CHAT_KEY = 'mod3.activeChatSession';
+      const savedActive = localStorage.getItem(ACTIVE_CHAT_KEY);
+      const restoreSid = (savedActive && typeof savedActive === 'string')
+        ? savedActive
+        : data.session_id;
+      if (typeof window.__selectChatSession === 'function') {
+        window.__selectChatSession(restoreSid);
+      } else {
+        // selectSession not yet wired (script-order timing) — set the bare
+        // window state and let the sidebar render-pass pick it up.
+        window.__activeChatSessionId = restoreSid;
+      }
+    } catch (e) {
+      console.warn('[session-restore] failed:', e);
+    }
   }
 
   async function pollSessions() {
