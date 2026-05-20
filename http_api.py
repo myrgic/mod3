@@ -1493,6 +1493,27 @@ async def seat_register(session_id: str, request: Request):
     )
     logger.info("Seat registered: %s in session %s (mode=%s)", seat.seat_id, session_id, channel_mode)
 
+    # Mirror the seat-bearing session into the SessionRegistry so GET /v1/sessions
+    # enumerates it. Without this, only sessions registered explicitly via
+    # POST /v1/sessions/register (today: just "main", seeded at startup) show up
+    # in the dashboard sidebar — Claude Code channel clients that bind their own
+    # session UUID per PR #103 are invisible to /v1/sessions and the dashboard
+    # reports "No active sessions". Idempotent: SessionRegistry.register preserves
+    # the existing voice allocation on re-register.
+    try:
+        from session_registry import get_default_registry as _get_session_registry
+
+        _participant_id = f"channel-client::{client_type}"
+        _get_session_registry().register(
+            session_id=session_id,
+            participant_id=_participant_id,
+            participant_type="agent",
+            preferred_voice=None,
+            preferred_output_device="system-default",
+        )
+    except Exception as e:  # noqa: BLE001 — never fail seat registration on mirror
+        logger.warning("session-registry mirror failed (non-fatal): %s", e)
+
     # Emit presence.started when any identity claim is present.
     #
     # Shape (Wave 6c / Primitive 2):
