@@ -365,6 +365,25 @@ async function spawnSession(sessionId, btn) {
       throw new Error(data.error?.message || `spawn returned ${r.status}`);
     }
     liveProcessId = data.process_id;
+    // Notify the dashboard tab (if this page was opened from it via
+    // window.open) so its ACP transport can session/resume onto the spawned
+    // session. Same-origin guard via window.location.origin. Spawned process
+    // takes a moment to register its seat; the listener is responsible for
+    // polling/waiting before calling sessionResume().
+    const spawnedSessionId = data.session_id || sessionId || null;
+    if (window.opener && spawnedSessionId) {
+      try {
+        window.opener.postMessage({
+          type: 'mod3:claude-code-spawned',
+          session_id: spawnedSessionId,
+          process_id: data.process_id,
+          project: data.project,
+          is_resume: isResume,
+        }, window.location.origin);
+      } catch (postErr) {
+        console.warn('[sessions] postMessage to opener failed:', postErr);
+      }
+    }
     const msg = isResume
       ? `Session resumed (process ${data.process_id}). The Claude Code subprocess is starting — check the Dashboard tab for the channel-client seat to appear.`
       : `New session mounted (process ${data.process_id}). Switch to the Dashboard tab to interact.`;

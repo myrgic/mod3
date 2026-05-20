@@ -504,7 +504,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--session",
-        default=os.environ.get("MOD3_SESSION_ID", _DEFAULT_SESSION_ID),
+        default=os.environ.get("MOD3_SESSION_ID") or _DEFAULT_SESSION_ID,
         help="Mod³ session ID to join (default: %(default)s)",
     )
     parser.add_argument(
@@ -513,6 +513,17 @@ def main() -> None:
         help="Run connectivity smoke test and exit (does not start stdio MCP server)",
     )
     args = parser.parse_args()
+
+    # Belt-and-suspenders: if MOD3_SESSION_ID env-substitution produced an empty
+    # string (the bash :- fallback semantics aren't formally guaranteed by every
+    # MCP loader), fall back to the default rather than registering a seat under
+    # session_id="" which would land at the malformed path /v1/sessions//seats.
+    if not args.session or not args.session.strip():
+        logger.warning(
+            "channel_client: --session resolved to empty; falling back to %r",
+            _DEFAULT_SESSION_ID,
+        )
+        args.session = _DEFAULT_SESSION_ID
 
     if args.test:
         rc = asyncio.run(_run_test(args.server))

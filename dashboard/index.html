@@ -2786,6 +2786,93 @@ chatInput.addEventListener('input', () => {
     }
   }
 
+  // Latest-attempt token: if a second postMessage arrives before the first
+  // attach completes, the first attempt's sessionResume call is suppressed
+  // so we don't end up bound to a stale session_id. Without this guard, a
+  // slow-to-register first session can finish its poll after a fast second
+  // session has already bound, and the late call would silently overwrite.
+  let _attachAttemptToken = 0;
+
+  /**
+   * Attach the ACP transport to a Claude Code session by id. Waits up to
+   * `timeoutMs` for a channel-client seat to appear on that session before
+   * calling sessionResume(), because the spawned Claude Code subprocess takes
+   * a moment to launch channel_client.py and register.
+   *
+   * If the deadline expires without a seat appearing, returns false without
+   * calling sessionResume — otherwise we'd bind the ACP connection to a
+   * session whose seats never registered, and the next sessionPrompt would
+   * fail with the cryptic "No channel-client seats attached" error rather
+   * than the cause (the spawn never produced a working channel client).
+   *
+   * If a later attach for a different session_id starts before this one's
+   * poll finishes, this attempt is aborted so the latest call wins.
+   */
+  async function attachToClaudeCodeSession(sessionId, { timeoutMs = 15000, pollMs = 500 } = {}) {
+    if (!sessionId) return false;
+    const myToken = ++_attachAttemptToken;
+    const deadline = Date.now() + timeoutMs;
+    let seatFound = false;
+    while (Date.now() < deadline) {
+      if (myToken !== _attachAttemptToken) {
+        console.log('[ACP] attachToClaudeCodeSession superseded by newer attempt');
+        return false;
+      }
+      try {
+        const r = await fetch(`/v1/sessions/${encodeURIComponent(sessionId)}/seats`);
+        if (r.ok) {
+          const data = await r.json();
+          if (Array.isArray(data.seats) && data.seats.length > 0) {
+            seatFound = true;
+            break;
+          }
+        }
+      } catch {}
+      await new Promise(res => setTimeout(res, pollMs));
+    }
+    if (myToken !== _attachAttemptToken) {
+      return false;
+    }
+    if (!seatFound) {
+      console.warn('[ACP] attachToClaudeCodeSession: no seat appeared on', sessionId, 'within', timeoutMs, 'ms — skipping sessionResume');
+      return false;
+    }
+    if (!window._acpTransport || !window._acpTransport.connected) {
+      console.warn('[ACP] attachToClaudeCodeSession: transport not ready');
+      return false;
+    }
+    try {
+      await window._acpTransport.sessionResume(sessionId);
+      console.log('[ACP] Attached to Claude Code session:', sessionId);
+      return true;
+    } catch (err) {
+      console.warn('[ACP] sessionResume failed for', sessionId, err);
+      return false;
+    }
+  }
+  window.__mod3AttachToClaudeCodeSession = attachToClaudeCodeSession;
+
+  // Cross-window bridge: when sessions.html spawns/resumes a Claude Code
+  // process and posts back to this dashboard tab, attach the ACP transport
+  // to the resulting session_id. Same-origin enforced. Mismatches are
+  // logged at info level so localhost-vs-127.0.0.1 misconfigurations are
+  // diagnosable from DevTools instead of silently no-op'ing.
+  window.addEventListener('message', (ev) => {
+    if (ev.origin !== window.location.origin) {
+      if (ev.data && ev.data.type === 'mod3:claude-code-spawned') {
+        console.info('[ACP] Ignoring mod3:claude-code-spawned from', ev.origin, '(expected', window.location.origin + ')');
+      }
+      return;
+    }
+    const data = ev.data || {};
+    if (data.type !== 'mod3:claude-code-spawned') return;
+    if (!data.session_id) return;
+    console.log('[ACP] Received spawn notification for session', data.session_id);
+    attachToClaudeCodeSession(data.session_id).catch(err => {
+      console.warn('[ACP] attachToClaudeCodeSession threw:', err);
+    });
+  });
+
   connectAcp();
 })();
 </script>

@@ -138,6 +138,28 @@ class AcpTransport {
   }
 
   /**
+   * Bind this ACP connection to a pre-existing session_id.
+   *
+   * Unlike sessionNew (which mints a fresh mod3-acp-... session), sessionResume
+   * attaches to a session that already has channel-client seats — e.g., the
+   * Claude Code session_id of a process spawned via /v1/claude-code/spawn, or
+   * the session_id of a manually-launched `claude --dangerously-load-development-channels`
+   * harness whose channel_client registered under MOD3_SESSION_ID=${CLAUDE_CODE_SESSION_ID}.
+   *
+   * Subsequent sessionPrompt() calls fan to the seats on that session_id.
+   * Server-side handler: http_api.py /ws/acp method=session/resume.
+   */
+  async sessionResume(sessionId) {
+    if (!sessionId) {
+      throw new Error('AcpTransport.sessionResume: sessionId is required');
+    }
+    const result = await this._request('session/resume', { sessionId });
+    this._sessionId = result.sessionId;
+    console.log('[ACP] Session resumed:', this._sessionId);
+    return this._sessionId;
+  }
+
+  /**
    * Submit a text prompt to the current session.
    * Streaming chunks are delivered via onAgentChunk(text) callback.
    * Returns the final SessionPromptResult when complete.
