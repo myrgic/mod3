@@ -18,6 +18,7 @@ Endpoints:
   GET  /v1/sessions/{id}/seats/{seat_id}/events — SSE event stream for a seat
   GET  /v1/sessions/{id}/seats             — list seats in a session
   POST /v1/sessions/{id}/messages          — fan dashboard text to all seats in session
+  GET  /v1/sessions/{id}/messages          — recent chat history for hydration
   POST /v1/sessions/broadcast-message     — fan dashboard text to ALL seats (all sessions)
   POST /v1/dashboard-chat                  — REST dashboard-chat (for channel clients)
   GET  /v1/logs/chat-flow                  — recent chat-flow events (JSON)
@@ -1685,6 +1686,18 @@ async def session_message(session_id: str, request: Request):
     )
 
     try:
+        from message_store import get_default_store as _get_msg_store
+
+        _get_msg_store().append(
+            session_id=session_id,
+            role=role if role in ("user", "assistant") else "user",
+            content=content,
+            input_type=input_type,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("message-store append (session_message) failed: %s", e)
+
+    try:
         seat_ids = [s["seat_id"] for s in registry.list_session_seats(session_id)]
         get_chat_flow_log().emit(
             CHAT_FAN_OUT,
@@ -1699,6 +1712,23 @@ async def session_message(session_id: str, request: Request):
         pass
 
     return {"status": "ok", "session_id": session_id, "seats_notified": count}
+
+
+@app.get("/v1/sessions/{session_id}/messages")
+async def session_messages_history(session_id: str, limit: int = 100):
+    """Recent chat history for *session_id*.
+
+    Used by the dashboard to hydrate the chat pane on refresh and when the
+    operator clicks a session row in the sidebar. RAM-only ring buffer — lost
+    on mod3 restart. ``limit`` caps the response size; the buffer itself is
+    bounded per session (see ``message_store.DEFAULT_MAX_PER_SESSION``).
+    """
+    from message_store import get_default_store as _get_msg_store
+
+    if limit <= 0 or limit > 1000:
+        limit = 100
+    messages = _get_msg_store().get(session_id, limit=limit)
+    return {"session_id": session_id, "messages": messages, "count": len(messages)}
 
 
 @app.post("/v1/sessions/broadcast-message")
@@ -1784,6 +1814,22 @@ async def broadcast_message(request: Request):
         except Exception:  # noqa: BLE001
             pass
 
+    # Persist into chat history under the resolved session id so the dashboard
+    # can hydrate that session's pane on refresh. For broadcast (no target),
+    # we attribute to "main" — that's where the dashboard send button routes
+    # when no @-mention or sidebar selection is active.
+    try:
+        from message_store import get_default_store as _get_msg_store
+
+        _get_msg_store().append(
+            session_id=target_session_id or "main",
+            role=role if role in ("user", "assistant") else "user",
+            content=content,
+            input_type=input_type,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("message-store append (broadcast) failed: %s", e)
+
     logger.debug(
         "broadcast-message: target=%s seats_notified=%d content=%r",
         target_label,
@@ -1845,6 +1891,23 @@ async def dashboard_chat_post(request: Request):
             },
             exclude_seat=originating_seat,
         )
+
+    # Persist into the per-session history so the dashboard can render this
+    # assistant turn on refresh / sidebar-switch. No session_id means we drop
+    # the message from history (still broadcast for live dashboards) — this
+    # path is reached when channel_client could not resolve a session id.
+    if session_id:
+        try:
+            from message_store import get_default_store as _get_msg_store
+
+            _get_msg_store().append(
+                session_id=session_id,
+                role=role if role in ("user", "assistant") else "assistant",
+                content=text,
+                input_type="text",
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("message-store append (dashboard-chat) failed: %s", e)
 
     try:
         get_chat_flow_log().emit(
