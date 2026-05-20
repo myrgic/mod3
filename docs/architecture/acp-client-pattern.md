@@ -62,21 +62,62 @@ The `COGOS_KERNEL_URL` env-var overrides the default `http://localhost:6931`.
 ## Spawn lifecycle
 
 ```
-1. Operator clicks "Resume" on sessions.html
-2. Browser POST /v1/claude-code/spawn → mod3 (port 7860)
-3. mod3 proxies → kernel POST /v1/claude-code/spawn (port 6931)
-4. Kernel writes temp .mcp.json (points channel_client.py at mod3)
-5. Kernel calls ClaudeCodeProvider.SpawnBackground(...)
-6. Kernel returns { process_id, status: "spawned", spawned_at }
-7. mod3 returns the kernel response verbatim (201)
-8. Dashboard banner: "Session resumed (process <id>)"
-9. Claude Code subprocess starts, loads .mcp.json
-10. channel_client.py connects: POST /v1/sessions/{id}/seats
-11. Seat appears in Dashboard tab participants panel
+1.  Operator clicks "Resume" on sessions.html
+2.  Browser POST /v1/claude-code/spawn → mod3 (port 7860)
+3.  mod3 proxies → kernel POST /v1/claude-code/spawn (port 6931)
+4.  Kernel writes temp .mcp.json (points channel_client.py at mod3,
+    passing --session <claude_session_id> directly via args)
+5.  Kernel calls ClaudeCodeProvider.SpawnBackground(...)
+6.  Kernel returns { process_id, session_id, status: "spawned", spawned_at }
+7.  mod3 returns the kernel response verbatim (201)
+8.  sessions.html posts {type:"mod3:claude-code-spawned", session_id, ...}
+    to window.opener (same-origin guarded). Dashboard banner shows
+    "Session resumed (process <id>)"
+9.  Claude Code subprocess starts, loads .mcp.json
+10. channel_client.py resolves its session_id (see "Channel-client
+    session resolution" below) and POSTs to /v1/sessions/{id}/seats
+11. Seat appears at /v1/sessions/{id}/seats
+12. dashboard/index.html's message listener receives the spawn
+    postMessage, polls /v1/sessions/{id}/seats until the seat appears
+    (up to 15s), then calls acpTransport.sessionResume(session_id)
+13. Dashboard's ACP transport is now bound to that session — subsequent
+    chat prompts fan to the spawned subprocess's seat via session/prompt
+14. Subprocess processes the prompt; replies via mod3_dashboard_post
+    MCP tool, which appears in the dashboard chat panel
 ```
 
-Steps 9-11 happen asynchronously. The spawn response confirms the subprocess
-was started; observe seat registration on the Dashboard tab to confirm it is live.
+Steps 9-13 happen asynchronously. The spawn response confirms the
+subprocess was started; the dashboard postMessage bridge plus seat-poll
+ensures the dashboard's ACP connection ends up bound to the spawned
+session's seats without operator intervention. The bridge was added in
+mod3 PR #103; without it, the operator would have to manually invoke
+`acpTransport.sessionResume(...)` from DevTools or use `@<session_id>`
+chat-mentions.
+
+### Channel-client session resolution
+
+`clients/channel_client.py` resolves its mod3 session_id in this order:
+
+1. Explicit `--session <id>` arg (set by the kernel spawn path above)
+2. `MOD3_SESSION_ID` env var
+3. **Parse `--resume <id>` from any claude ancestor's argv** — covers
+   the manual `claude --dangerously-load-development-channels server:mod3
+   --resume <id>` launch path. argv is exec()-set and never changes,
+   immune to the state-file rewrite below.
+4. `~/.claude/sessions/<parent-pid>.json` — Claude Code writes this
+   state file at startup with the harness session_id. The resolver
+   walks the parent-chain and polls up to 60s (the file is written
+   ~30s after MCP children spawn).
+5. Most-recently-modified `~/.claude/sessions/*.json` whose owning
+   PID is still alive (kill -0 check) — handles bg-spare re-parenting
+   where the ancestry doesn't trace back to claude.
+6. `_DEFAULT_SESSION_ID = "main"` — last-resort fallback for non-Claude
+   MCP clients.
+
+The first resolved value wins. A diagnostic log line is appended to
+`~/.mod3/channel-client-startup.log` on every launch with the resolved
+session_id and source — useful for post-mortem when seat registration
+lands on an unexpected session.
 
 ---
 
