@@ -290,6 +290,77 @@ class TestChannelClientSessionResolution:
             f"resolver should skip dead-PID files even if they're more recent; got {resolved!r}"
         )
 
+    def test_startup_log_writes_to_file(self, tmp_path, monkeypatch):
+        """channel_client writes a startup diagnostic line to a known path
+        on every launch, so operators can post-mortem what session_id the
+        resolver picked even though Claude Code captures the MCP child's
+        stderr internally."""
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("cc", REPO_ROOT / "clients" / "channel_client.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        log_path = tmp_path / "startup.log"
+        monkeypatch.setattr(mod, "_STARTUP_LOG_PATH", log_path)
+
+        mod._write_startup_log(
+            resolved_session_id="d4f02587",
+            source="~/.claude/sessions/12345.json (parent chain)",
+            ppid=12345,
+        )
+        content = log_path.read_text()
+        assert "session_id=d4f02587" in content
+        assert "ppid=12345" in content
+        assert "source=~/.claude/sessions/12345.json" in content
+
+    def test_startup_log_trims_to_max_lines(self, tmp_path, monkeypatch):
+        """The startup log auto-trims to keep size bounded. Without this,
+        a long-running operator who restarts claude many times would
+        accumulate an unbounded log file."""
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("cc", REPO_ROOT / "clients" / "channel_client.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        log_path = tmp_path / "startup.log"
+        monkeypatch.setattr(mod, "_STARTUP_LOG_PATH", log_path)
+        monkeypatch.setattr(mod, "_STARTUP_LOG_MAX_LINES", 5)
+
+        for i in range(20):
+            mod._write_startup_log(
+                resolved_session_id=f"sid-{i}",
+                source="test",
+                ppid=1000 + i,
+            )
+
+        lines = log_path.read_text().strip().splitlines()
+        assert len(lines) <= 5, f"log should be trimmed to 5 lines, got {len(lines)}"
+        # Most recent entries are at the end
+        assert "sid-19" in lines[-1]
+
+    def test_startup_log_never_raises(self, tmp_path, monkeypatch):
+        """The startup log is best-effort — channel_client must not crash
+        if the log path is unwritable (e.g., no perms, read-only fs)."""
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("cc", REPO_ROOT / "clients" / "channel_client.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        # Point at a path under a file (so mkdir fails)
+        existing_file = tmp_path / "a_file"
+        existing_file.write_text("x")
+        monkeypatch.setattr(mod, "_STARTUP_LOG_PATH", existing_file / "subdir" / "log")
+
+        # Should silently succeed
+        mod._write_startup_log(
+            resolved_session_id="x",
+            source="y",
+            ppid=1,
+        )
+
     def test_default_poll_timeout_at_least_30s(self, channel_client_src):
         """The default poll_timeout_s must be at least 30 seconds — the
         observed delay between channel_client spawn and Claude Code writing
