@@ -188,6 +188,124 @@ class TestChannelClientSessionResolution:
         resolved = mod._resolve_claude_session_id(poll_timeout_s=0.2, poll_interval_s=0.05)
         assert resolved is None
 
+    def test_resolver_falls_back_to_most_recent_state_file(self, tmp_path, monkeypatch):
+        """When the parent-chain ancestry doesn't include the claude process
+        (e.g., pre-warm-spare wrapper interposed) but a fresh state file
+        EXISTS in the directory, the resolver should fall back to using the
+        most-recently-modified file rather than collapsing to 'main'.
+
+        This catches the regression where PR #105/#106 worked only when the
+        parent-chain happened to contain a claude PID — bg-spare re-parenting
+        breaks that assumption.
+        """
+        import importlib.util
+        import time
+
+        spec = importlib.util.spec_from_file_location("cc", REPO_ROOT / "clients" / "channel_client.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        fake_sessions = tmp_path / "claude_sessions"
+        fake_sessions.mkdir()
+        monkeypatch.setattr(mod, "_CLAUDE_SESSIONS_DIR", fake_sessions)
+        # Parent chain hits a dead end without ever finding a state file.
+        monkeypatch.setattr(mod.os, "getppid", lambda: 99999)
+        monkeypatch.setattr(mod, "_read_parent_pid", lambda _pid: 0)
+        # Both fake PIDs are "alive" — we're testing recency, not liveness.
+        monkeypatch.setattr(mod, "_pid_is_alive", lambda _pid: True)
+
+        # Two state files: an old one and a recent one. The resolver should
+        # pick the recent one. Note: the parent-chain PID (99999) is NOT in
+        # either filename — this verifies the fallback path.
+        (fake_sessions / "11111.json").write_text(json.dumps({"pid": 11111, "sessionId": "old-session"}))
+        # Backdate so mtime is far in the past
+        old_path = fake_sessions / "11111.json"
+        old_time = time.time() - 300
+        import os as _os
+
+        _os.utime(old_path, (old_time, old_time))
+
+        (fake_sessions / "22222.json").write_text(json.dumps({"pid": 22222, "sessionId": "newest-session"}))
+
+        # Short timeout — fallback should fire after parent-chain misses
+        resolved = mod._resolve_claude_session_id(poll_timeout_s=0.2, poll_interval_s=0.05)
+        assert resolved == "newest-session", f"resolver must fall back to most-recent state file; got {resolved!r}"
+
+    def test_fallback_ignores_dead_pid_state_files(self, tmp_path, monkeypatch):
+        """The fallback must skip state files whose owning PID is dead.
+        Mtime isn't a reliable freshness signal — Claude Code only updates
+        the file on status changes, so an active session can be quiet for
+        many minutes. Liveness (kill -0) is the right check.
+
+        Here we name a file with a definitely-dead PID (PID 1 doesn't have
+        a claude state file; high random PIDs are very likely free) and
+        confirm the resolver doesn't pick it.
+        """
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("cc", REPO_ROOT / "clients" / "channel_client.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        fake_sessions = tmp_path / "claude_sessions"
+        fake_sessions.mkdir()
+        monkeypatch.setattr(mod, "_CLAUDE_SESSIONS_DIR", fake_sessions)
+        monkeypatch.setattr(mod.os, "getppid", lambda: 99999)
+        monkeypatch.setattr(mod, "_read_parent_pid", lambda _pid: 0)
+        # Force liveness check to say "dead" for any PID we file under
+        monkeypatch.setattr(mod, "_pid_is_alive", lambda _pid: False)
+
+        (fake_sessions / "44444.json").write_text(json.dumps({"pid": 44444, "sessionId": "dead-session"}))
+
+        resolved = mod._resolve_claude_session_id(poll_timeout_s=0.2, poll_interval_s=0.05)
+        assert resolved is None, f"dead-PID state files must not be used; got {resolved!r}"
+
+    def test_fallback_picks_alive_pid_over_dead_one(self, tmp_path, monkeypatch):
+        """Two state files exist: dead older one is most-recently-modified;
+        live newer one (in mtime order) should still be chosen because the
+        dead one's PID fails the liveness check."""
+        import importlib.util
+        import os as _os
+        import time
+
+        spec = importlib.util.spec_from_file_location("cc", REPO_ROOT / "clients" / "channel_client.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        fake_sessions = tmp_path / "claude_sessions"
+        fake_sessions.mkdir()
+        monkeypatch.setattr(mod, "_CLAUDE_SESSIONS_DIR", fake_sessions)
+        monkeypatch.setattr(mod.os, "getppid", lambda: 99999)
+        monkeypatch.setattr(mod, "_read_parent_pid", lambda _pid: 0)
+        monkeypatch.setattr(mod, "_pid_is_alive", lambda pid: pid == 77777)
+
+        # Dead PID 55555, recently modified; live PID 77777, older.
+        (fake_sessions / "55555.json").write_text(json.dumps({"pid": 55555, "sessionId": "dead-but-recent"}))
+        (fake_sessions / "77777.json").write_text(json.dumps({"pid": 77777, "sessionId": "alive-but-older"}))
+        old_time = time.time() - 60
+        _os.utime(fake_sessions / "77777.json", (old_time, old_time))
+
+        resolved = mod._resolve_claude_session_id(poll_timeout_s=0.2, poll_interval_s=0.05)
+        assert resolved == "alive-but-older", (
+            f"resolver should skip dead-PID files even if they're more recent; got {resolved!r}"
+        )
+
+    def test_default_poll_timeout_at_least_30s(self, channel_client_src):
+        """The default poll_timeout_s must be at least 30 seconds — the
+        observed delay between channel_client spawn and Claude Code writing
+        its state file was ~35s on one machine. A tighter default risks
+        the same race that broke PR #106."""
+        match = re.search(
+            r"def\s+_resolve_claude_session_id\s*\([\s\S]*?poll_timeout_s\s*:\s*float\s*=\s*([\d.]+)",
+            channel_client_src,
+        )
+        assert match, "could not find poll_timeout_s default in resolver signature"
+        default_timeout = float(match.group(1))
+        assert default_timeout >= 30.0, (
+            f"poll_timeout_s default is {default_timeout}s — observed startup delay was ~35s, "
+            "default should be at least 30s (preferably 60s)"
+        )
+
     def test_old_env_substitution_removed_from_config(self, cfg):
         """The original PR #103 used ${CLAUDE_CODE_SESSION_ID:-main} in an env
         block; that approach didn't actually fire because the var isn't in the
