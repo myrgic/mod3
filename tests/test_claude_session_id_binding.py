@@ -111,6 +111,83 @@ class TestChannelClientSessionResolution:
         assert "is_dir" in body or "exists" in body, "resolver must guard against missing ~/.claude/sessions directory"
         assert "return None" in body, "resolver must return None when no state file is found"
 
+    def test_resolver_polls_for_state_file(self, channel_client_src):
+        """Claude Code writes ~/.claude/sessions/<PID>.json AFTER spawning
+        its MCP children — empirically ~2 minutes later. A one-shot check
+        returns None and falls back to 'main', breaking the binding. The
+        resolver must poll with a deadline so it survives the startup race.
+        """
+        match = re.search(
+            r"def\s+_resolve_claude_session_id[\s\S]*?\n\s*def\s",
+            channel_client_src,
+        )
+        assert match
+        body = match.group(0)
+        # Look for a poll-shaped pattern: a deadline + sleep loop, or
+        # equivalent retry mechanism.
+        has_poll = bool(re.search(r"poll_timeout|deadline|monotonic|time\.sleep|while\s+True", body))
+        assert has_poll, (
+            "resolver must poll for the state file (Claude Code writes it "
+            "after MCP children spawn — a single up-front check loses the race)"
+        )
+
+    def test_resolver_actually_resolves_with_simulated_late_state_file(self, tmp_path, monkeypatch):
+        """Live-fire the resolver: simulate Claude Code's race by writing the
+        state file ~200ms after the resolver starts. The resolver should
+        succeed because of the poll. This catches regressions where someone
+        removes the poll thinking it's belt-and-suspenders.
+        """
+        import importlib.util
+        import threading
+
+        spec = importlib.util.spec_from_file_location("cc", REPO_ROOT / "clients" / "channel_client.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        fake_sessions = tmp_path / "claude_sessions"
+        fake_sessions.mkdir()
+        monkeypatch.setattr(mod, "_CLAUDE_SESSIONS_DIR", fake_sessions)
+        # Force the resolver to walk the parent chain to a known PID.
+        fake_pid = 99999
+        monkeypatch.setattr(mod.os, "getppid", lambda: fake_pid)
+        monkeypatch.setattr(mod, "_read_parent_pid", lambda _pid: 0)
+
+        target_session = "deadbeef-1234-5678-9abc-def012345678"
+
+        def write_state_file_later():
+            import time
+
+            time.sleep(0.2)
+            (fake_sessions / f"{fake_pid}.json").write_text(json.dumps({"pid": fake_pid, "sessionId": target_session}))
+
+        threading.Thread(target=write_state_file_later, daemon=True).start()
+
+        # 2-second timeout is more than enough for the 200ms delay
+        resolved = mod._resolve_claude_session_id(poll_timeout_s=2.0, poll_interval_s=0.05)
+        assert resolved == target_session, (
+            f"resolver must wait for the state file (expected {target_session}, got {resolved})"
+        )
+
+    def test_resolver_gives_up_after_timeout(self, tmp_path, monkeypatch):
+        """If the state file truly never appears (non-Claude MCP client),
+        the resolver must return None after its deadline rather than
+        blocking indefinitely."""
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("cc", REPO_ROOT / "clients" / "channel_client.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        fake_sessions = tmp_path / "claude_sessions"
+        fake_sessions.mkdir()
+        monkeypatch.setattr(mod, "_CLAUDE_SESSIONS_DIR", fake_sessions)
+        monkeypatch.setattr(mod.os, "getppid", lambda: 99999)
+        monkeypatch.setattr(mod, "_read_parent_pid", lambda _pid: 0)
+
+        # 200ms total timeout, no file appears
+        resolved = mod._resolve_claude_session_id(poll_timeout_s=0.2, poll_interval_s=0.05)
+        assert resolved is None
+
     def test_old_env_substitution_removed_from_config(self, cfg):
         """The original PR #103 used ${CLAUDE_CODE_SESSION_ID:-main} in an env
         block; that approach didn't actually fire because the var isn't in the

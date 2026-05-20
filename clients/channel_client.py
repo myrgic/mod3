@@ -81,39 +81,63 @@ _TOKEN_PATH = Path.home() / ".mod3" / "channel-client.token"
 _CLAUDE_SESSIONS_DIR = Path.home() / ".claude" / "sessions"
 
 
-def _resolve_claude_session_id() -> str | None:
+def _resolve_claude_session_id(
+    *,
+    poll_timeout_s: float = 10.0,
+    poll_interval_s: float = 0.1,
+) -> str | None:
     """Find the harness session_id of the Claude Code process that spawned us.
 
     Claude Code writes ``~/.claude/sessions/<PID>.json`` (containing
     ``{pid, sessionId, ...}``) for every active claude process. The MCP child
-    sees its parent's PID via ``os.getppid()``. So we walk the parent chain,
-    looking for the first ancestor that has a session file. Returns the
-    sessionId string, or ``None`` if no claude ancestor is found.
+    sees its parent's PID via ``os.getppid()``. We compute the parent-chain
+    of candidate PIDs once, then poll for ANY of their state files to appear.
 
-    This is more robust than relying on env-substitution in ``mcp.channel.json``
-    (``${CLAUDE_CODE_SESSION_ID:-main}``): empirically, CLAUDE_CODE_SESSION_ID
-    is not present in the parent claude process's env at MCP-spawn time, so the
-    substitution silently falls back to ``main`` and every session collapses
-    into the same seat namespace.
+    The poll handles a real startup race: empirically, the channel_client is
+    spawned about 2 seconds after claude starts, but claude writes its state
+    file later (after its own initialization completes, several seconds in).
+    Without polling, a single up-front check fails, the resolver returns None,
+    and every session falls back to the ``main`` sentinel — the exact bug
+    that PRs #103 + #105 were intended to fix.
+
+    Returns the sessionId string, or ``None`` if no claude ancestor produces
+    a state file before the deadline.
     """
+    import time
+
     if not _CLAUDE_SESSIONS_DIR.is_dir():
         return None
+
+    # Snapshot the parent-chain once. PPIDs don't change during this poll
+    # (macOS re-parents only when a parent dies). Walk up to 6 levels —
+    # usually claude is the direct parent, but pre-warm-spare configurations
+    # can interpose a wrapper.
+    candidates: list[int] = []
     pid = os.getppid()
-    # Walk up the parent chain a few levels — usually claude is the direct
-    # parent, but pre-warm-spare configurations can interpose a wrapper.
     for _ in range(6):
         if pid <= 1:
             break
-        session_file = _CLAUDE_SESSIONS_DIR / f"{pid}.json"
-        if session_file.is_file():
+        candidates.append(pid)
+        pid = _read_parent_pid(pid)
+    if not candidates:
+        return None
+
+    deadline = time.monotonic() + poll_timeout_s
+    while True:
+        for cand_pid in candidates:
+            session_file = _CLAUDE_SESSIONS_DIR / f"{cand_pid}.json"
+            if not session_file.is_file():
+                continue
             try:
                 payload = json.loads(session_file.read_text())
             except (OSError, json.JSONDecodeError):
-                return None
+                continue
             sid = payload.get("sessionId")
-            return sid if isinstance(sid, str) and sid else None
-        pid = _read_parent_pid(pid)
-    return None
+            if isinstance(sid, str) and sid:
+                return sid
+        if time.monotonic() >= deadline:
+            return None
+        time.sleep(poll_interval_s)
 
 
 def _read_parent_pid(pid: int) -> int:
