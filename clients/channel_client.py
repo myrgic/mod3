@@ -79,6 +79,8 @@ _DEFAULT_SERVER_URL = "http://localhost:7860"
 _DEFAULT_SESSION_ID = "main"
 _TOKEN_PATH = Path.home() / ".mod3" / "channel-client.token"
 _CLAUDE_SESSIONS_DIR = Path.home() / ".claude" / "sessions"
+_STARTUP_LOG_PATH = Path.home() / ".mod3" / "channel-client-startup.log"
+_STARTUP_LOG_MAX_LINES = 200
 
 
 def _resolve_claude_session_id(
@@ -182,6 +184,49 @@ def _most_recent_state_file_session_id() -> str | None:
         if sid:
             return sid
     return None
+
+
+def _session_id_source(session_id: str) -> str:
+    """Classify where a resolved session_id came from for diagnostic logging."""
+    if session_id == _DEFAULT_SESSION_ID:
+        return f"DEFAULT ({_DEFAULT_SESSION_ID})"
+    if os.environ.get("MOD3_SESSION_ID") == session_id:
+        return "MOD3_SESSION_ID env"
+    # Either parent-chain or fallback — distinguish by checking if the
+    # parent's state file matches.
+    ppid = os.getppid()
+    direct = _read_session_id(_CLAUDE_SESSIONS_DIR / f"{ppid}.json")
+    if direct == session_id:
+        return f"~/.claude/sessions/{ppid}.json (parent chain)"
+    return "~/.claude/sessions/*.json (most-recent fallback)"
+
+
+def _write_startup_log(*, resolved_session_id: str, source: str, ppid: int) -> None:
+    """Append a startup diagnostic line, then trim to last N lines.
+
+    Format: ``YYYY-MM-DDTHH:MM:SS pid=<self> ppid=<parent> session_id=<id> source=<...>``
+
+    Best-effort; never raises (the channel client must not die because the
+    log directory can't be written).
+    """
+    import datetime as _dt
+
+    try:
+        _STARTUP_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        line = (
+            f"{_dt.datetime.now().isoformat(timespec='seconds')} "
+            f"pid={os.getpid()} ppid={ppid} "
+            f"session_id={resolved_session_id} "
+            f"source={source}\n"
+        )
+        try:
+            existing = _STARTUP_LOG_PATH.read_text().splitlines()
+        except (OSError, FileNotFoundError):
+            existing = []
+        trimmed = existing[-(_STARTUP_LOG_MAX_LINES - 1) :] + [line.rstrip()]
+        _STARTUP_LOG_PATH.write_text("\n".join(trimmed) + "\n")
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _pid_is_alive(pid: int) -> bool:
@@ -677,7 +722,20 @@ def main() -> None:
             _DEFAULT_SESSION_ID,
         )
         args.session = _DEFAULT_SESSION_ID
-    elif args.session != _DEFAULT_SESSION_ID:
+
+    # Diagnostic startup log to a file the operator can read post-mortem.
+    # Claude Code captures the MCP child's stderr internally and it's not
+    # easy to retrieve, so without this we have no visibility into what
+    # session_id the resolver picked. The startup log is small (one line
+    # per invocation) and auto-rotates by trimming old entries to the
+    # most recent 200 lines.
+    _write_startup_log(
+        resolved_session_id=args.session,
+        source=_session_id_source(args.session),
+        ppid=os.getppid(),
+    )
+
+    if args.session != _DEFAULT_SESSION_ID:
         logger.info(
             "channel_client: resolved session_id=%s (from %s)",
             args.session,
