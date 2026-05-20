@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+### Added — Dashboard ↔ Claude Code channel binding
+
+- **Bind mod3 seats to the real Claude Code session_id.** Each Claude Code session now registers a distinct channel-client seat instead of all sessions collapsing into the legacy `"main"` sentinel. `clients/channel_client.py` reads `~/.claude/sessions/<parent-pid>.json` at startup to discover the harness session_id; the kernel's `/v1/claude-code/spawn` flow continues to pass `--session <id>` directly via a temp `.mcp.json`. Dashboard `sessions.html` posts `mod3:claude-code-spawned` (same-origin) to its opener after spawning; `index.html` listens, polls `/v1/sessions/<id>/seats` until the seat appears, then calls `acpTransport.sessionResume(session_id)` to bind its ACP connection. New `AcpTransport.sessionResume(sessionId)` method wraps the existing server-side `/ws/acp` `session/resume` handler. (#103)
+- **Hotfix: state-file resolution.** `${CLAUDE_CODE_SESSION_ID:-main}` env-substitution in `mcp.channel.json` doesn't fire because that variable isn't in the parent claude process's env at MCP-spawn time. Replaced with `_resolve_claude_session_id()` walking up the parent PID chain to read Claude Code's own `~/.claude/sessions/<PID>.json` state file. (#105)
+
+### Security
+
+- **Pre-existing auth posture surfaced.** During review of #103, the security review flagged that `/v1/sessions/{id}/seats`, `/v1/sessions/broadcast-message`, and `/v1/claude-code/spawn` have no auth or CSRF protection. The findings predate this work (the localhost-only design assumed no untrusted browser context) but the dashboard wiring now exercises these endpoints from same-origin scripts. Phased mitigation tracked in #104.
+
 ## [0.7.0] - 2026-05-19
 
 ### Added — Wave-6b session identity claims
