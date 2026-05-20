@@ -105,11 +105,11 @@ class TestHistoryEndpoint:
         with patch("access.is_allowed", return_value=True):
             # Register a seat so the session exists end-to-end (mirrors the
             # channel-client flow that PR #103/111 wires up).
-            client.post(f"/v1/sessions/{sid}/seats",
-                        json={"client_type": "claude-code-channel", "device_uuid": sid})
+            client.post(f"/v1/sessions/{sid}/seats", json={"client_type": "claude-code-channel", "device_uuid": sid})
 
-        r = client.post(f"/v1/sessions/{sid}/messages",
-                        json={"content": "hello there", "role": "user", "input_type": "text"})
+        r = client.post(
+            f"/v1/sessions/{sid}/messages", json={"content": "hello there", "role": "user", "input_type": "text"}
+        )
         assert r.status_code == 200, r.text
 
         hist = client.get(f"/v1/sessions/{sid}/messages").json()
@@ -120,8 +120,7 @@ class TestHistoryEndpoint:
 
     def test_dashboard_chat_post_persists_assistant_reply(self, client):
         sid = str(uuid.uuid4())
-        r = client.post("/v1/dashboard-chat",
-                        json={"text": "hi from agent", "role": "assistant", "session_id": sid})
+        r = client.post("/v1/dashboard-chat", json={"text": "hi from agent", "role": "assistant", "session_id": sid})
         assert r.status_code == 200, r.text
 
         hist = client.get(f"/v1/sessions/{sid}/messages").json()
@@ -131,8 +130,7 @@ class TestHistoryEndpoint:
 
     def test_broadcast_message_with_target_persists_to_target(self, client):
         sid = str(uuid.uuid4())
-        r = client.post("/v1/sessions/broadcast-message",
-                        json={"content": "targeted hello", "target_session_id": sid})
+        r = client.post("/v1/sessions/broadcast-message", json={"content": "targeted hello", "target_session_id": sid})
         assert r.status_code == 200, r.text
 
         hist = client.get(f"/v1/sessions/{sid}/messages").json()
@@ -140,8 +138,7 @@ class TestHistoryEndpoint:
         assert hist["messages"][0]["content"] == "targeted hello"
 
     def test_broadcast_without_target_persists_under_main(self, client):
-        r = client.post("/v1/sessions/broadcast-message",
-                        json={"content": "fanout hello"})
+        r = client.post("/v1/sessions/broadcast-message", json={"content": "fanout hello"})
         assert r.status_code == 200, r.text
 
         hist = client.get("/v1/sessions/main/messages").json()
@@ -157,8 +154,7 @@ class TestHistoryEndpoint:
     def test_get_history_clamps_limit(self, client):
         sid = str(uuid.uuid4())
         for i in range(5):
-            client.post(f"/v1/sessions/{sid}/messages",
-                        json={"content": f"m{i}", "role": "user"})
+            client.post(f"/v1/sessions/{sid}/messages", json={"content": f"m{i}", "role": "user"})
 
         # Negative / zero / oversize clamp to default 100
         for bad in (0, -10, 99999):
