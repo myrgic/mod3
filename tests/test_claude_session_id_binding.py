@@ -119,7 +119,14 @@ class TestDashboardPostMessageBridge:
 
     def test_index_html_listens_for_spawn_message(self, index_html):
         """index.html must register a message listener that filters on
-        origin + message type and binds the ACP transport to the new session."""
+        origin + message type and binds the ACP transport to the new session.
+
+        Loose 'sessionResume appears anywhere in the file' would let a broken
+        implementation that defines the method but never calls it from the
+        listener pass. The wiring check below requires the message listener
+        to actually invoke attachToClaudeCodeSession with the spawned
+        session_id.
+        """
         assert "mod3:claude-code-spawned" in index_html, (
             "index.html must listen for the 'mod3:claude-code-spawned' message type"
         )
@@ -127,9 +134,62 @@ class TestDashboardPostMessageBridge:
         assert "ev.origin !== window.location.origin" in index_html or (
             "event.origin !== window.location.origin" in index_html
         )
-        # Must call sessionResume (via the helper) to actually attach.
-        assert "sessionResume" in index_html, (
-            "index.html must call acpTransport.sessionResume after receiving the spawn message"
+        # Wiring check: the listener body must call attachToClaudeCodeSession
+        # with data.session_id (not just reference sessionResume somewhere).
+        # Scope to `window.addEventListener('message', ...)` — the dashboard
+        # also has WebSocket-message listeners that match a looser regex.
+        listener_match = re.search(
+            r"window\.addEventListener\(\s*['\"]message['\"]\s*,\s*\([^)]*\)\s*=>\s*\{[\s\S]*?mod3:claude-code-spawned[\s\S]*?\}\s*\)\s*;",
+            index_html,
+        )
+        assert listener_match, "index.html must register a window message listener with an arrow handler"
+        listener_body = listener_match.group(0)
+        assert "mod3:claude-code-spawned" in listener_body, (
+            "the message listener body must filter on the 'mod3:claude-code-spawned' type"
+        )
+        assert "attachToClaudeCodeSession" in listener_body, (
+            "the message listener body must actually call attachToClaudeCodeSession; "
+            "merely defining sessionResume elsewhere is insufficient wiring"
+        )
+        # And the helper itself must invoke sessionResume.
+        # Anchor on the global assignment that follows the helper definition,
+        # since the helper body contains nested `}\n` lines that confuse a
+        # naïve non-greedy match.
+        helper_match = re.search(
+            r"async\s+function\s+attachToClaudeCodeSession\s*\([\s\S]*?window\.__mod3AttachToClaudeCodeSession",
+            index_html,
+        )
+        assert helper_match, "attachToClaudeCodeSession helper must exist"
+        assert "sessionResume" in helper_match.group(0), (
+            "attachToClaudeCodeSession must call the ACP transport's sessionResume"
+        )
+
+    def test_origin_mismatch_aborts_listener_path(self, index_html):
+        """The same-origin guard must be an early return at the top of the
+        message handler — not a conditional that still proceeds on mismatch.
+
+        Without this, a broken refactor (e.g. an `if/else` that flips polarity)
+        could let cross-origin messages reach attachToClaudeCodeSession.
+        """
+        match = re.search(
+            r"window\.addEventListener\(\s*['\"]message['\"]\s*,\s*\([^)]*\)\s*=>\s*\{([\s\S]*?mod3:claude-code-spawned[\s\S]*?)\}\s*\)\s*;",
+            index_html,
+        )
+        assert match, "could not locate the spawn-message listener body"
+        body = match.group(1)
+        # The origin check must appear before attachToClaudeCodeSession; otherwise
+        # cross-origin messages could reach the attach logic.
+        origin_idx = -1
+        for needle in ("ev.origin", "event.origin"):
+            i = body.find(needle)
+            if i >= 0:
+                origin_idx = i
+                break
+        assert origin_idx >= 0, "listener body must reference ev.origin or event.origin"
+        attach_idx = body.find("attachToClaudeCodeSession")
+        assert attach_idx > origin_idx, (
+            "the origin check must appear before attachToClaudeCodeSession; "
+            "otherwise cross-origin messages could trigger the attach"
         )
 
     def test_attach_helper_waits_for_seat(self, index_html):
@@ -142,3 +202,47 @@ class TestDashboardPostMessageBridge:
             r"/v1/sessions/\$\{[^}]+\}/seats|/v1/sessions/.+seats",
             index_html,
         ), "attach helper must poll /v1/sessions/<id>/seats before calling sessionResume"
+
+    def test_attach_helper_skips_resume_on_timeout(self, index_html):
+        """If the seat-poll deadline expires without a seat appearing, the
+        helper must NOT call sessionResume — otherwise the subsequent
+        session/prompt fails with the cryptic 'no seats' error instead of
+        the cause (spawn produced no working channel client)."""
+        # Anchor on the global assignment that follows the helper definition,
+        # since the helper body contains nested `}\n` lines that confuse a
+        # naïve non-greedy match.
+        helper_match = re.search(
+            r"async\s+function\s+attachToClaudeCodeSession\s*\([\s\S]*?window\.__mod3AttachToClaudeCodeSession",
+            index_html,
+        )
+        assert helper_match
+        body = helper_match.group(0)
+        # The helper must track whether a seat was found and skip resume when
+        # it wasn't. Accept either an explicit boolean or an early-return.
+        assert re.search(r"seatFound|no seat appeared", body), (
+            "helper must track seat-found state and warn/abort when the poll deadline expires without a seat"
+        )
+
+    def test_attach_helper_has_supersede_guard(self, index_html):
+        """When two postMessages for different session_ids arrive in rapid
+        succession, only the latest attach attempt should call sessionResume.
+        Without this guard, a slow first attach can overwrite a fast second
+        bind, and the dashboard ends up addressing the wrong session.
+
+        Implementation may use a monotonic token, an AbortController, or
+        equivalent — just verify some form of newer-wins discipline exists.
+        """
+        # Anchor on the global assignment that follows the helper definition,
+        # since the helper body contains nested `}\n` lines that confuse a
+        # naïve non-greedy match.
+        helper_match = re.search(
+            r"async\s+function\s+attachToClaudeCodeSession\s*\([\s\S]*?window\.__mod3AttachToClaudeCodeSession",
+            index_html,
+        )
+        assert helper_match
+        body = helper_match.group(0)
+        has_token_guard = bool(re.search(r"_attachAttemptToken|AbortController|attemptId|superseded", body))
+        assert has_token_guard, (
+            "attachToClaudeCodeSession must guard against newer attempts overwriting older ones; "
+            "expected a token/AbortController/'superseded' pattern in the helper"
+        )
