@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed — Dashboard version pills
+
+- **Render the mod3 version alongside the kernel version, and stop double-prefixing the kernel `v`.** The kernel `/health` endpoint emits `"version": "v0.10.0"` (with a leading `v`); mod3 `/health` emits `"version": "0.7.0"` (no prefix). The previous pill renderer hardcoded `' v' + d.version`, so the kernel pill displayed `kernel vv0.10.0`, and the mod3 pill hardcoded the bare label `mod3` with no version at all. A new `formatVersion()` normalizer strips a leading `v` before re-prefixing; both pills funnel through it, so the header now shows `kernel v0.10.0` and `mod3 v0.7.0` consistently.
+
 ### Added — Dashboard session switching + chat persistence across refresh
 
 - **Per-session chat history.** New `message_store.py` keeps a per-session ring buffer (default 500 messages) of `{id, session_id, role, content, input_type, ts}` records. `POST /v1/sessions/{id}/messages`, `POST /v1/sessions/broadcast-message`, and `POST /v1/dashboard-chat` all append into the store under the resolved session id; broadcasts without a target attribute fall back to the `"main"` session. New endpoint `GET /v1/sessions/{id}/messages?limit=N` (default 100, max 1000) returns the recent slice for hydration. RAM-only; restart wipes the buffer (parity with seats / SessionRegistry / chat-flow log).
