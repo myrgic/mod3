@@ -78,6 +78,61 @@ logger = logging.getLogger("mod3.channel_client")
 _DEFAULT_SERVER_URL = "http://localhost:7860"
 _DEFAULT_SESSION_ID = "main"
 _TOKEN_PATH = Path.home() / ".mod3" / "channel-client.token"
+_CLAUDE_SESSIONS_DIR = Path.home() / ".claude" / "sessions"
+
+
+def _resolve_claude_session_id() -> str | None:
+    """Find the harness session_id of the Claude Code process that spawned us.
+
+    Claude Code writes ``~/.claude/sessions/<PID>.json`` (containing
+    ``{pid, sessionId, ...}``) for every active claude process. The MCP child
+    sees its parent's PID via ``os.getppid()``. So we walk the parent chain,
+    looking for the first ancestor that has a session file. Returns the
+    sessionId string, or ``None`` if no claude ancestor is found.
+
+    This is more robust than relying on env-substitution in ``mcp.channel.json``
+    (``${CLAUDE_CODE_SESSION_ID:-main}``): empirically, CLAUDE_CODE_SESSION_ID
+    is not present in the parent claude process's env at MCP-spawn time, so the
+    substitution silently falls back to ``main`` and every session collapses
+    into the same seat namespace.
+    """
+    if not _CLAUDE_SESSIONS_DIR.is_dir():
+        return None
+    pid = os.getppid()
+    # Walk up the parent chain a few levels — usually claude is the direct
+    # parent, but pre-warm-spare configurations can interpose a wrapper.
+    for _ in range(6):
+        if pid <= 1:
+            break
+        session_file = _CLAUDE_SESSIONS_DIR / f"{pid}.json"
+        if session_file.is_file():
+            try:
+                payload = json.loads(session_file.read_text())
+            except (OSError, json.JSONDecodeError):
+                return None
+            sid = payload.get("sessionId")
+            return sid if isinstance(sid, str) and sid else None
+        pid = _read_parent_pid(pid)
+    return None
+
+
+def _read_parent_pid(pid: int) -> int:
+    """Return the parent PID of ``pid``, or 0 if it can't be determined.
+
+    Uses ``ps`` rather than /proc because macOS has no /proc filesystem.
+    """
+    import subprocess
+
+    try:
+        out = subprocess.check_output(
+            ["ps", "-o", "ppid=", "-p", str(pid)],
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return 0
+    text = out.decode("ascii", errors="ignore").strip()
+    return int(text) if text.isdigit() else 0
 
 
 # ---------------------------------------------------------------------------
@@ -502,9 +557,19 @@ def main() -> None:
         default=os.environ.get("MOD3_SERVER_URL", _DEFAULT_SERVER_URL),
         help="Mod³ HTTP server URL (default: %(default)s)",
     )
+    # Default session_id resolution priority (most → least preferred):
+    #   1. Explicit --session arg
+    #   2. MOD3_SESSION_ID env var (e.g. injected by the kernel's spawn flow
+    #      at /v1/claude-code/spawn → temp .mcp.json with --session <id>)
+    #   3. ~/.claude/sessions/<parent-pid>.json (the canonical mechanism for
+    #      manual-launch Claude Code: the harness writes its own state file
+    #      at startup, keyed by PID)
+    #   4. _DEFAULT_SESSION_ID ("main") — last-resort fallback for non-Claude
+    #      MCP clients
+    default_session = os.environ.get("MOD3_SESSION_ID") or _resolve_claude_session_id() or _DEFAULT_SESSION_ID
     parser.add_argument(
         "--session",
-        default=os.environ.get("MOD3_SESSION_ID") or _DEFAULT_SESSION_ID,
+        default=default_session,
         help="Mod³ session ID to join (default: %(default)s)",
     )
     parser.add_argument(
@@ -514,16 +579,22 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    # Belt-and-suspenders: if MOD3_SESSION_ID env-substitution produced an empty
-    # string (the bash :- fallback semantics aren't formally guaranteed by every
-    # MCP loader), fall back to the default rather than registering a seat under
-    # session_id="" which would land at the malformed path /v1/sessions//seats.
+    # Belt-and-suspenders: if the resolved session_id is empty/whitespace
+    # (e.g. MOD3_SESSION_ID="" or a malformed Claude session file), fall back
+    # to the default rather than registering a seat under session_id="" which
+    # would land at the malformed path /v1/sessions//seats.
     if not args.session or not args.session.strip():
         logger.warning(
             "channel_client: --session resolved to empty; falling back to %r",
             _DEFAULT_SESSION_ID,
         )
         args.session = _DEFAULT_SESSION_ID
+    elif args.session != _DEFAULT_SESSION_ID:
+        logger.info(
+            "channel_client: resolved session_id=%s (from %s)",
+            args.session,
+            "MOD3_SESSION_ID" if os.environ.get("MOD3_SESSION_ID") else "~/.claude/sessions/<ppid>.json",
+        )
 
     if args.test:
         rc = asyncio.run(_run_test(args.server))

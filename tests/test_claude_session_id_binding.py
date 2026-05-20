@@ -39,38 +39,91 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 # ---------------------------------------------------------------------------
-# Path 1 — mcp.channel.json env-pass
+# Path 1 — channel_client resolves session_id from ~/.claude/sessions/PID.json
 # ---------------------------------------------------------------------------
+#
+# Earlier shape (PR #103): mcp.channel.json used ${CLAUDE_CODE_SESSION_ID:-main}
+# env-substitution. Empirically that var is NOT in the parent claude process's
+# env at MCP-spawn time, so the substitution fell back to 'main' silently and
+# the loop never closed. PR #105 replaced env-substitution with state-file
+# resolution: channel_client.py walks up its parent chain and reads
+# ~/.claude/sessions/<PID>.json (which Claude Code writes at startup).
 
 
-class TestMcpChannelEnvPass:
+class TestChannelClientSessionResolution:
     @pytest.fixture(scope="class")
     def cfg(self):
         return json.loads((REPO_ROOT / "mcp.channel.json").read_text())
+
+    @pytest.fixture(scope="class")
+    def channel_client_src(self):
+        return (REPO_ROOT / "clients" / "channel_client.py").read_text()
 
     def test_mod3_server_entry_exists(self, cfg):
         assert "mcpServers" in cfg
         assert "mod3" in cfg["mcpServers"]
 
-    def test_env_block_present(self, cfg):
-        mod3 = cfg["mcpServers"]["mod3"]
-        assert "env" in mod3, "mcp.channel.json mod3 entry must declare an env block"
-
-    def test_session_id_pulled_from_harness(self, cfg):
-        """MOD3_SESSION_ID must substitute from CLAUDE_CODE_SESSION_ID with a
-        'main' fallback so manually-launched Claude Code sessions are bound to
-        their harness session_id rather than colliding on 'main'."""
-        env = cfg["mcpServers"]["mod3"]["env"]
-        assert "MOD3_SESSION_ID" in env
-        value = env["MOD3_SESSION_ID"]
-        # Accept either ${VAR:-default} (preferred) or ${VAR} forms; both flow
-        # through Claude Code's env-substitution. The 'main' fallback is
-        # important for backward compatibility when the harness env isn't set.
-        assert value.startswith("${CLAUDE_CODE_SESSION_ID"), (
-            f"MOD3_SESSION_ID must reference CLAUDE_CODE_SESSION_ID, got: {value!r}"
+    def test_resolver_function_defined(self, channel_client_src):
+        """channel_client must expose a resolver that reads the Claude Code
+        session_id from ~/.claude/sessions/<PID>.json rather than relying on
+        environment substitution at MCP-spawn time."""
+        assert re.search(r"def\s+_resolve_claude_session_id\s*\(", channel_client_src), (
+            "channel_client.py must define _resolve_claude_session_id()"
         )
-        assert ":-main" in value or "}" == value[-1], (
-            f"MOD3_SESSION_ID should fall back to 'main' if the harness env is unset, got: {value!r}"
+        assert "~/.claude/sessions" in channel_client_src or ".claude/sessions" in channel_client_src
+        assert "_CLAUDE_SESSIONS_DIR" in channel_client_src
+        assert "sessionId" in channel_client_src, "resolver must extract the 'sessionId' field from the state file"
+
+    def test_resolver_walks_parent_chain(self, channel_client_src):
+        """The resolver must walk the parent PID chain (not just check getppid)
+        — pre-warm-spare configurations interpose a wrapper between claude
+        and the MCP child, so the immediate parent isn't always claude."""
+        assert "os.getppid" in channel_client_src
+        assert "_read_parent_pid" in channel_client_src or "ppid=" in channel_client_src
+
+    def test_default_session_uses_resolver(self, channel_client_src):
+        """The argparse --session default must thread through the resolver,
+        with priority: explicit --session > MOD3_SESSION_ID env > state-file
+        resolver > _DEFAULT_SESSION_ID."""
+        # The composed expression should appear near the parser.add_argument
+        # for --session. Match the resolver call within a few hundred chars of
+        # the argparse setup.
+        assert re.search(
+            r"MOD3_SESSION_ID[\s\S]{0,400}_resolve_claude_session_id",
+            channel_client_src,
+        ), "default session must combine MOD3_SESSION_ID env with the state-file resolver"
+        # Must still fall back to _DEFAULT_SESSION_ID as last resort.
+        assert re.search(
+            r"_resolve_claude_session_id[\s\S]{0,200}_DEFAULT_SESSION_ID",
+            channel_client_src,
+        ), "must fall back to _DEFAULT_SESSION_ID when neither env nor state-file yields a value"
+
+    def test_resolver_handles_missing_state_dir(self, channel_client_src):
+        """If ~/.claude/sessions doesn't exist (non-Claude MCP clients), the
+        resolver must return None gracefully rather than crashing."""
+        # The function body should guard the directory existence.
+        match = re.search(
+            r"def\s+_resolve_claude_session_id[\s\S]*?\n\s*def\s",
+            channel_client_src,
+        )
+        assert match, "could not isolate the resolver function body"
+        body = match.group(0)
+        assert "is_dir" in body or "exists" in body, "resolver must guard against missing ~/.claude/sessions directory"
+        assert "return None" in body, "resolver must return None when no state file is found"
+
+    def test_old_env_substitution_removed_from_config(self, cfg):
+        """The original PR #103 used ${CLAUDE_CODE_SESSION_ID:-main} in an env
+        block; that approach didn't actually fire because the var isn't in the
+        parent claude's env at substitution time. PR #105 removes it to avoid
+        confusion (the state-file resolver in channel_client.py is the real
+        mechanism now). An env block may still exist for OTHER reasons, but
+        MOD3_SESSION_ID specifically should not be set via env-substitution."""
+        env = cfg["mcpServers"]["mod3"].get("env", {})
+        mod3_session = env.get("MOD3_SESSION_ID", "")
+        assert "${CLAUDE_CODE_SESSION_ID" not in mod3_session, (
+            "MOD3_SESSION_ID should not rely on ${CLAUDE_CODE_SESSION_ID} substitution — "
+            "that var is not in the parent claude process's env at MCP-spawn time. "
+            "Use channel_client.py's state-file resolver instead."
         )
 
 
