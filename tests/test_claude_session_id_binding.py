@@ -361,6 +361,126 @@ class TestChannelClientSessionResolution:
             ppid=1,
         )
 
+    def test_resolver_prefers_resume_argv_over_state_file(self, tmp_path, monkeypatch):
+        """When parent claude's argv contains ``--resume <id>``, the resolver
+        must use THAT id directly — not the state file. Claude Code writes a
+        placeholder session_id to the state file at startup, then rewrites
+        it with the actual --resume target ~28s later. Trusting the state
+        file alone gives the placeholder for the entire startup window.
+        """
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("cc", REPO_ROOT / "clients" / "channel_client.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        fake_sessions = tmp_path / "claude_sessions"
+        fake_sessions.mkdir()
+        monkeypatch.setattr(mod, "_CLAUDE_SESSIONS_DIR", fake_sessions)
+        monkeypatch.setattr(mod.os, "getppid", lambda: 50000)
+        monkeypatch.setattr(mod, "_read_parent_pid", lambda _pid: 0)
+
+        # State file says PLACEHOLDER (the bug we're fixing)
+        (fake_sessions / "50000.json").write_text(
+            json.dumps({"pid": 50000, "sessionId": "PLACEHOLDER-from-buggy-state-file"})
+        )
+        # argv says the REAL --resume target
+        monkeypatch.setattr(
+            mod,
+            "_read_resume_arg_from_pid",
+            lambda pid: "REAL-resume-target" if pid == 50000 else None,
+        )
+
+        resolved = mod._resolve_claude_session_id(poll_timeout_s=0.2, poll_interval_s=0.05)
+        assert resolved == "REAL-resume-target", (
+            f"resolver must prefer argv --resume value over state file content; got {resolved!r}"
+        )
+
+    def test_read_resume_arg_parses_session_id(self, tmp_path, monkeypatch):
+        """The argv parser must extract the session_id following --resume."""
+        import importlib.util
+        import subprocess
+
+        spec = importlib.util.spec_from_file_location("cc", REPO_ROOT / "clients" / "channel_client.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        # Mock subprocess.check_output to simulate ps output
+        def fake_check_output(cmd, **kwargs):
+            return b"claude --dangerously-skip-permissions --dangerously-load-development-channels server:mod3 --resume my-target-session-id\n"
+
+        monkeypatch.setattr(subprocess, "check_output", fake_check_output)
+        result = mod._read_resume_arg_from_pid(12345)
+        assert result == "my-target-session-id"
+
+    def test_read_resume_arg_rejects_non_claude(self, monkeypatch):
+        """The argv parser must NOT match --resume in unrelated processes."""
+        import importlib.util
+        import subprocess
+
+        spec = importlib.util.spec_from_file_location("cc", REPO_ROOT / "clients" / "channel_client.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        def fake_check_output(cmd, **kwargs):
+            # A different tool that happens to use --resume
+            return b"some_other_tool --resume abc-def\n"
+
+        monkeypatch.setattr(subprocess, "check_output", fake_check_output)
+        assert mod._read_resume_arg_from_pid(12345) is None
+
+    def test_read_resume_arg_rejects_shell_with_claude_in_string(self, monkeypatch):
+        """A shell process whose argv contains the string ``claude --resume``
+        (e.g., in an echo statement) must NOT match. The first token has to
+        be the claude executable, not just a process that mentions it.
+        """
+        import importlib.util
+        import subprocess
+
+        spec = importlib.util.spec_from_file_location("cc", REPO_ROOT / "clients" / "channel_client.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        def fake_check_output(cmd, **kwargs):
+            # A shell running a command that mentions claude --resume
+            return b"/bin/zsh -c echo 'claude --resume sneaky-session-id'\n"
+
+        monkeypatch.setattr(subprocess, "check_output", fake_check_output)
+        assert mod._read_resume_arg_from_pid(12345) is None
+
+    def test_read_resume_arg_accepts_absolute_claude_path(self, monkeypatch):
+        """Full path to the claude binary (e.g., /usr/local/bin/claude) must
+        still be recognized — we match on basename."""
+        import importlib.util
+        import subprocess
+
+        spec = importlib.util.spec_from_file_location("cc", REPO_ROOT / "clients" / "channel_client.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        def fake_check_output(cmd, **kwargs):
+            return b"/Users/slowbro/.local/bin/claude --resume my-sid\n"
+
+        monkeypatch.setattr(subprocess, "check_output", fake_check_output)
+        assert mod._read_resume_arg_from_pid(12345) == "my-sid"
+
+    def test_read_resume_arg_handles_bare_resume(self, monkeypatch):
+        """``claude --resume`` (no argument; interactive picker) should NOT
+        be treated as a session_id. The token following --resume is a flag
+        (or absent), not a session_id."""
+        import importlib.util
+        import subprocess
+
+        spec = importlib.util.spec_from_file_location("cc", REPO_ROOT / "clients" / "channel_client.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        def fake_check_output(cmd, **kwargs):
+            return b"claude --resume --debug\n"
+
+        monkeypatch.setattr(subprocess, "check_output", fake_check_output)
+        assert mod._read_resume_arg_from_pid(12345) is None
+
     def test_default_poll_timeout_at_least_30s(self, channel_client_src):
         """The default poll_timeout_s must be at least 30 seconds — the
         observed delay between channel_client spawn and Claude Code writing

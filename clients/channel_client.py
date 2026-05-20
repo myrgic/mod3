@@ -90,33 +90,35 @@ def _resolve_claude_session_id(
 ) -> str | None:
     """Find the harness session_id of the Claude Code process that spawned us.
 
-    Claude Code writes ``~/.claude/sessions/<PID>.json`` (containing
-    ``{pid, sessionId, ...}``) for every active claude process. The MCP child
-    sees its parent's PID via ``os.getppid()``. We compute the parent-chain
-    of candidate PIDs once, then poll for ANY of their state files to appear.
+    Resolution order (highest priority first):
 
-    Two empirically-observed quirks shape this:
+    1. **Parse ``--resume <id>`` from the parent claude's argv.** When claude
+       is launched with ``--resume <id>``, the session_id is right there in
+       its command line. This is the most reliable source — beats the state
+       file (which has a startup race), beats anything else.
 
-    1. **Startup race.** The channel_client is spawned about 2 seconds after
-       claude starts, but claude writes its state file LATER — observed
-       ~35 seconds after channel_client launch on this machine. So the poll
-       deadline must be generous; 60s is comfortably above the worst case
-       seen but still bounds the wait for non-Claude MCP clients.
+    2. **Read ``~/.claude/sessions/<PID>.json``.** Claude Code writes this for
+       every active claude process. We walk the parent-chain (because pre-warm
+       spares can interpose a wrapper) and poll for any candidate's file to
+       appear. Used for new sessions and ``--continue``.
 
-    2. **Ancestry chain may not contain the claude PID at all** in pre-warm
-       spare configurations where the spare gets re-claimed. Fallback: if
-       the parent-chain poll times out, look at the most-recently-modified
-       state file in ``~/.claude/sessions/`` — assume it belongs to the
-       claude process that's actively driving this MCP child. Best-effort
-       guess but better than collapsing to ``main`` and breaking the loop.
+    3. **Most-recently-modified live state file.** Fallback when the
+       parent-chain ancestry doesn't trace back to claude.
 
-    Returns the sessionId string, or ``None`` if no candidate file is found
-    within the deadline AND the directory has no recently-modified files.
+    Empirically-observed quirks the design has to absorb:
+
+    - **Startup race.** Channel_client spawns ~2s after claude; claude writes
+      state file LATER (up to 35s observed). 60s poll covers it.
+    - **State file rewrite for --resume.** Claude writes a PLACEHOLDER
+      session_id first, then rewrites with the actual --resume target ~28s
+      later. The argv-parse path (above) avoids this entirely by reading
+      argv instead of trusting the file.
+    - **Ancestry mismatch.** Pre-warm spares re-parent the MCP child away
+      from the claude binary; parent-chain misses, fallback fires.
+
+    Returns the sessionId string, or ``None`` if all sources are exhausted.
     """
     import time
-
-    if not _CLAUDE_SESSIONS_DIR.is_dir():
-        return None
 
     # Snapshot the parent-chain once. PPIDs don't change during this poll
     # (macOS re-parents only when a parent dies). Walk up to 6 levels —
@@ -129,6 +131,17 @@ def _resolve_claude_session_id(
             break
         candidates.append(pid)
         pid = _read_parent_pid(pid)
+
+    # Priority 1: parse --resume <id> from any claude ancestor's argv. This
+    # is immune to the placeholder-rewrite bug — argv is set at exec() time
+    # and never changes for the life of the process.
+    for cand_pid in candidates:
+        sid = _read_resume_arg_from_pid(cand_pid)
+        if sid:
+            return sid
+
+    if not _CLAUDE_SESSIONS_DIR.is_dir():
+        return None
 
     deadline = time.monotonic() + poll_timeout_s
     while candidates:
@@ -266,6 +279,51 @@ def _read_parent_pid(pid: int) -> int:
         return 0
     text = out.decode("ascii", errors="ignore").strip()
     return int(text) if text.isdigit() else 0
+
+
+def _read_resume_arg_from_pid(pid: int) -> str | None:
+    """Look for ``--resume <session_id>`` in the argv of ``pid``.
+
+    Returns the session_id if found, else ``None``. Only considers processes
+    whose argv contains ``claude`` (otherwise we'd match unrelated processes
+    that happen to use a ``--resume`` flag).
+
+    This is the most reliable source of the harness session_id when claude
+    is launched with ``--resume``: argv is set at exec() time and never
+    changes, unlike the ``~/.claude/sessions/<PID>.json`` state file which
+    gets rewritten by claude ~28s after startup with the actual --resume
+    target (the initial write contains a placeholder).
+    """
+    import subprocess
+
+    try:
+        out = subprocess.check_output(
+            ["ps", "-o", "command=", "-p", str(pid)],
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return None
+    argv = out.decode("utf-8", errors="ignore").strip()
+    tokens = argv.split()
+    if not tokens:
+        return None
+    # Only consider processes where claude is the actual executable (the
+    # first token), not just a string appearing somewhere in argv (e.g. an
+    # `echo "claude --resume ..."` in a shell). The first token's basename
+    # must be ``claude`` (the binary name) — full path is fine.
+    exe_basename = tokens[0].rsplit("/", 1)[-1]
+    if exe_basename != "claude":
+        return None
+    for i, tok in enumerate(tokens):
+        if tok == "--resume" and i + 1 < len(tokens):
+            candidate = tokens[i + 1]
+            # Reject the bare ``--resume`` (interactive picker) where the
+            # next token is another flag rather than a session_id.
+            if candidate.startswith("-"):
+                return None
+            return candidate
+    return None
 
 
 # ---------------------------------------------------------------------------
