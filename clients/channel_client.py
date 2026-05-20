@@ -669,31 +669,67 @@ def build_mcp_server(client: ChannelClient) -> FastMCP:
             return f"error: {exc}"
 
     @mcp.tool()
-    async def mod3_speak(text: str, voice: str = "eng_uk_m_davids", speed: float = 1.0) -> dict:
+    async def mod3_speak(
+        text: str,
+        voice: str = "eng_uk_m_davids",
+        speed: float = 1.0,
+        post_to_chat: bool = True,
+    ) -> dict:
         """Synthesize text to speech and play it through the Mod³ daemon.
 
         Hits POST /v1/speak (queue-aware endpoint). Returns immediately with a
         job token — the daemon's drain thread owns all audio playback.
+
+        By default also posts the spoken text to the dashboard chat panel as
+        an ``assistant`` message so the visible transcript matches what the
+        operator heard. Without this, audio plays but the chat pane shows
+        nothing — confusing when the operator goes back later to reread.
+        Pass ``post_to_chat=False`` for system sounds, audio cues, or other
+        non-conversational speech that shouldn't appear in the transcript.
 
         Args:
             text: Text to synthesize and speak aloud.
             voice: Voice preset name (use list_voices to discover options).
                 Default: eng_uk_m_davids (Chatterbox-Turbo, British male).
             speed: Playback speed multiplier (0.5–2.0). Default: 1.0.
+            post_to_chat: When True (default), also POSTs to /v1/dashboard-chat
+                under the current session_id so the spoken text appears in the
+                dashboard chat panel and is persisted to per-session history.
 
         Returns:
             {"job_id": str, "queue_position": int, "status": "speaking" | "queued"}
             Poll GET /v1/jobs/{job_id} for completion. Stop via POST /v1/stop.
         """
-        url = f"{client.server_url}/v1/speak"
-        body: dict[str, Any] = {
+        speak_url = f"{client.server_url}/v1/speak"
+        speak_body: dict[str, Any] = {
             "text": text,
             "voice": voice,
             "speed": speed,
         }
         try:
             async with httpx.AsyncClient() as http:
-                resp = await http.post(url, json=body, headers=_auth_headers(client.token), timeout=30.0)
+                # Fan the same text to the dashboard chat panel first so the
+                # transcript lands at roughly the same time as audio playback
+                # begins. Best-effort: a failed post must not block speech.
+                if post_to_chat:
+                    try:
+                        chat_url = f"{client.server_url}/v1/dashboard-chat"
+                        chat_body = {
+                            "text": text,
+                            "role": "assistant",
+                            "session_id": client.session_id,
+                            "seat_id": client.seat_id,
+                        }
+                        await http.post(
+                            chat_url,
+                            json=chat_body,
+                            headers=_auth_headers(client.token),
+                            timeout=5.0,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.debug("mod3_speak: chat mirror failed (non-fatal): %s", exc)
+
+                resp = await http.post(speak_url, json=speak_body, headers=_auth_headers(client.token), timeout=30.0)
                 resp.raise_for_status()
                 return resp.json()
         except Exception as exc:  # noqa: BLE001

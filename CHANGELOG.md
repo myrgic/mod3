@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed — `mod3_speak` mirrors to dashboard chat by default
+
+- **Speech now appears in the chat panel + per-session history.** The MCP `mod3_speak` tool previously only hit `POST /v1/speak`: audio played, but the dashboard chat pane stayed empty and nothing landed in the per-session ring buffer. Operators going back to reread a conversation later saw their own prompts but no agent responses for any turn delivered as speech. The tool now POSTs the spoken text to `/v1/dashboard-chat` (as an `assistant` message under the seat's `session_id`) *before* invoking `/v1/speak`, so the transcript lands at roughly the same time audio begins. The chat mirror is best-effort — a failed POST logs and continues, so audio playback is never blocked. New `post_to_chat` parameter (default `True`) opts out for non-conversational audio (system sounds, UI cues).
+
 ### Fixed — Channel client survives mod3 restarts
 
 - **Reconnect the SSE stream + re-register the seat after disconnect.** `ChannelClient.run_sse_subscription` was a one-shot: on any stream disconnect (mod3 restart, network blip, server-side close), the coroutine returned silently and the seat was lost until the MCP child was respawned. Symptom: every mod3 restart made attached Claude Code sessions invisible to the dashboard sidebar even though the channel client process was still alive. The subscription now runs in a reconnect loop: on disconnect it re-POSTs to `/v1/sessions/<id>/seats` to get a fresh seat_id (mod3 wiped its registry on restart, so the old one is invalid) and resumes streaming. Backoff is exponential (1s → 2s → 4s, capped at 30s) and resets to 1s after a healthy stream survives ≥5s; the inner register loop retries until mod3 responds rather than thrashing the stream while mod3 is still down. `asyncio.CancelledError` still exits cleanly so shutdown paths are unaffected.
