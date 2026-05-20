@@ -873,14 +873,22 @@
     if (lbl) lbl.textContent = label;
   }
 
+  // Normalize a version string to "v<semver>". The kernel emits "v0.10.0"
+  // (leading v); mod3 emits "0.7.0" (no leading v). Strip the prefix if
+  // present and re-add it so both pills render consistently.
+  function formatVersion(raw) {
+    if (!raw) return '';
+    const s = String(raw).trim();
+    return ' v' + (s.startsWith('v') ? s.slice(1) : s);
+  }
+
   async function pollPills() {
     // Kernel pill
     try {
       const r = await fetch(KERNEL_URL, { signal: AbortSignal.timeout(2500) });
       if (r.ok) {
         const d = await r.json();
-        const ver = d.version ? ' v' + d.version : '';
-        setPill('pill-kernel-dot', 'pill-kernel-label', 'ok', 'kernel' + ver);
+        setPill('pill-kernel-dot', 'pill-kernel-label', 'ok', 'kernel' + formatVersion(d.version));
       } else {
         setPill('pill-kernel-dot', 'pill-kernel-label', 'warn', 'kernel ' + r.status);
       }
@@ -892,7 +900,7 @@
       const r = await fetch(MOD3_HEALTH_URL, { signal: AbortSignal.timeout(2500) });
       if (r.ok) {
         const d = await r.json();
-        setPill('pill-mod3-dot', 'pill-mod3-label', d.status === 'ok' ? 'ok' : 'warn', 'mod3');
+        setPill('pill-mod3-dot', 'pill-mod3-label', d.status === 'ok' ? 'ok' : 'warn', 'mod3' + formatVersion(d.version));
       } else {
         setPill('pill-mod3-dot', 'pill-mod3-label', 'err', 'mod3 ' + r.status);
       }
