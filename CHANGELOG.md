@@ -6,6 +6,7 @@
 
 - **Bind mod3 seats to the real Claude Code session_id.** Each Claude Code session now registers a distinct channel-client seat instead of all sessions collapsing into the legacy `"main"` sentinel. `clients/channel_client.py` reads `~/.claude/sessions/<parent-pid>.json` at startup to discover the harness session_id; the kernel's `/v1/claude-code/spawn` flow continues to pass `--session <id>` directly via a temp `.mcp.json`. Dashboard `sessions.html` posts `mod3:claude-code-spawned` (same-origin) to its opener after spawning; `index.html` listens, polls `/v1/sessions/<id>/seats` until the seat appears, then calls `acpTransport.sessionResume(session_id)` to bind its ACP connection. New `AcpTransport.sessionResume(sessionId)` method wraps the existing server-side `/ws/acp` `session/resume` handler. (#103)
 - **Hotfix: state-file resolution.** `${CLAUDE_CODE_SESSION_ID:-main}` env-substitution in `mcp.channel.json` doesn't fire because that variable isn't in the parent claude process's env at MCP-spawn time. Replaced with `_resolve_claude_session_id()` walking up the parent PID chain to read Claude Code's own `~/.claude/sessions/<PID>.json` state file. (#105)
+- **Hotfix: resolver polls for state file (startup race).** Claude Code writes its `~/.claude/sessions/<PID>.json` AFTER spawning MCP children — the resolver's one-shot check lost the race and fell back to `"main"`. Now polls with a 10s deadline + 100ms interval; PPID chain is snapshotted once. Live-fire test simulates a 200ms-late state file to catch regressions. (#106)
 
 ### Security
 
