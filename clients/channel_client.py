@@ -432,38 +432,119 @@ class ChannelClient:
         except Exception as exc:  # noqa: BLE001
             logger.debug("Failed to send channel notification: %s", exc)
 
+    async def _stream_seat_events_once(self) -> None:
+        """One pass over the SSE stream. Returns on clean stream end.
+
+        Raises asyncio.CancelledError on intentional cancel; surfaces httpx
+        errors to the caller so the reconnect loop can act on them.
+        """
+        url = f"{self.server_url}/v1/sessions/{self.session_id}/seats/{self.seat_id}/events"
+        headers = {**_auth_headers(self.token), "Accept": "text/event-stream"}
+        async with httpx.AsyncClient(timeout=None) as client:
+            async with client.stream("GET", url, headers=headers) as resp:
+                resp.raise_for_status()
+                event_type: str | None = None
+                data_lines: list[str] = []
+                async for line in resp.aiter_lines():
+                    if line.startswith("event:"):
+                        event_type = line[len("event:") :].strip()
+                    elif line.startswith("data:"):
+                        data_lines.append(line[len("data:") :].strip())
+                    elif line == "":
+                        if data_lines:
+                            raw = "\n".join(data_lines)
+                            await self._handle_sse_event(event_type, raw)
+                        event_type = None
+                        data_lines = []
+
+    async def _reregister_seat(self) -> bool:
+        """Re-POST the seat registration. Used after mod3 restart wipes state."""
+        try:
+            async with httpx.AsyncClient() as client:
+                result = await _register_seat(
+                    client,
+                    self.server_url,
+                    self.session_id,
+                    self.token,
+                    self.device_uuid,
+                )
+            new_seat_id = result.get("seat_id")
+            if not new_seat_id:
+                logger.warning("Re-register returned no seat_id: %r", result)
+                return False
+            self.seat_id = new_seat_id
+            logger.info(
+                "Seat re-registered after disconnect: seat_id=%s session_id=%s",
+                self.seat_id,
+                self.session_id,
+            )
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Seat re-register failed: %s", exc)
+            return False
+
     async def run_sse_subscription(self) -> None:
-        """Stream events from GET /v1/sessions/{session_id}/seats/{seat_id}/events."""
+        """Stream seat events with reconnect-on-disconnect.
+
+        Originally a one-shot subscriber — when mod3 restarted (or any
+        connection blip dropped the stream), the seat was silently lost and
+        the dashboard sidebar would not surface this Claude Code session
+        until the MCP child was respawned. Now: on any disconnect we re-POST
+        the seat (mod3 wiped its registry on restart, so the old seat_id is
+        invalid) and resume streaming under the new seat_id.
+
+        Backoff: 1s, 2s, 4s, ..., capped at 30s; reset to 1s after a stream
+        survives longer than ``_HEALTHY_STREAM_S``.
+        """
         if not self.seat_id:
             logger.error("No seat_id — cannot subscribe to events")
             return
-        url = f"{self.server_url}/v1/sessions/{self.session_id}/seats/{self.seat_id}/events"
-        headers = {**_auth_headers(self.token), "Accept": "text/event-stream"}
-        logger.info("Subscribing to seat events at %s", url)
-        try:
-            async with httpx.AsyncClient(timeout=None) as client:
-                async with client.stream("GET", url, headers=headers) as resp:
-                    resp.raise_for_status()
-                    event_type: str | None = None
-                    data_lines: list[str] = []
-                    async for line in resp.aiter_lines():
-                        if line.startswith("event:"):
-                            event_type = line[len("event:") :].strip()
-                        elif line.startswith("data:"):
-                            data_lines.append(line[len("data:") :].strip())
-                        elif line == "":
-                            # End of SSE event — process it
-                            if data_lines:
-                                raw = "\n".join(data_lines)
-                                await self._handle_sse_event(event_type, raw)
-                            event_type = None
-                            data_lines = []
-        except httpx.RemoteProtocolError as exc:
-            logger.info("SSE stream closed: %s", exc)
-        except asyncio.CancelledError:
-            logger.debug("SSE subscription cancelled")
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("SSE subscription error: %s", exc)
+
+        backoff = 1.0
+        backoff_cap = 30.0
+        _HEALTHY_STREAM_S = 5.0
+
+        while True:
+            logger.info(
+                "Subscribing to seat events: session=%s seat=%s",
+                self.session_id,
+                self.seat_id,
+            )
+            started = asyncio.get_event_loop().time()
+            stream_error: str | None = None
+            try:
+                await self._stream_seat_events_once()
+                stream_error = "stream ended cleanly"
+            except asyncio.CancelledError:
+                logger.debug("SSE subscription cancelled")
+                raise
+            except httpx.HTTPStatusError as exc:
+                stream_error = f"http {exc.response.status_code}"
+            except httpx.RemoteProtocolError as exc:
+                stream_error = f"remote protocol error: {exc}"
+            except (httpx.ConnectError, httpx.ReadError, httpx.ReadTimeout) as exc:
+                stream_error = f"connect/read error: {exc}"
+            except Exception as exc:  # noqa: BLE001
+                stream_error = f"unexpected: {exc}"
+
+            elapsed = asyncio.get_event_loop().time() - started
+            logger.info(
+                "SSE subscription ended after %.1fs: %s — attempting reconnect",
+                elapsed,
+                stream_error,
+            )
+            if elapsed >= _HEALTHY_STREAM_S:
+                backoff = 1.0
+
+            # Re-register with exponential backoff until success. Banging on
+            # the stream while mod3 is still down just thrashes; the inner
+            # loop sleeps + retries the cheap POST until mod3 responds.
+            while True:
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, backoff_cap)
+                if await self._reregister_seat():
+                    break
+                # else: keep looping with increasing backoff
 
     async def _handle_sse_event(self, event_type: str | None, raw_data: str) -> None:
         """Parse an SSE event and forward to Claude Code."""

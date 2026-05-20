@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed — Channel client survives mod3 restarts
+
+- **Reconnect the SSE stream + re-register the seat after disconnect.** `ChannelClient.run_sse_subscription` was a one-shot: on any stream disconnect (mod3 restart, network blip, server-side close), the coroutine returned silently and the seat was lost until the MCP child was respawned. Symptom: every mod3 restart made attached Claude Code sessions invisible to the dashboard sidebar even though the channel client process was still alive. The subscription now runs in a reconnect loop: on disconnect it re-POSTs to `/v1/sessions/<id>/seats` to get a fresh seat_id (mod3 wiped its registry on restart, so the old one is invalid) and resumes streaming. Backoff is exponential (1s → 2s → 4s, capped at 30s) and resets to 1s after a healthy stream survives ≥5s; the inner register loop retries until mod3 responds rather than thrashing the stream while mod3 is still down. `asyncio.CancelledError` still exits cleanly so shutdown paths are unaffected.
+
 ### Fixed — Dashboard version pills
 
 - **Render the mod3 version alongside the kernel version, and stop double-prefixing the kernel `v`.** The kernel `/health` endpoint emits `"version": "v0.10.0"` (with a leading `v`); mod3 `/health` emits `"version": "0.7.0"` (no prefix). The previous pill renderer hardcoded `' v' + d.version`, so the kernel pill displayed `kernel vv0.10.0`, and the mod3 pill hardcoded the bare label `mod3` with no version at all. A new `formatVersion()` normalizer strips a leading `v` before re-prefixing; both pills funnel through it, so the header now shows `kernel v0.10.0` and `mod3 v0.7.0` consistently.
