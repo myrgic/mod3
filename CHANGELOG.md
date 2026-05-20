@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed — Dashboard sidebar enumerates seat-bearing sessions
+
+- **Mirror seat-bearing sessions into SessionRegistry.** `POST /v1/sessions/{id}/seats` now idempotently registers the session in the voice-TTS `SessionRegistry` after the seat lands. Before this fix only the startup-seeded `"main"` session showed up in `GET /v1/sessions`; Claude Code channel clients bound to their own session UUID per PR #103 were attached at `/v1/sessions/{id}/seats` but invisible to the sidebar, which reported "No active sessions" with a live channel client. `SessionRegistry.register` preserves existing voice allocation on repeat calls, so multiple seats under the same session_id don't reshuffle the voice. Mirror failures log a warning and never break seat registration.
+
 ### Added — Dashboard ↔ Claude Code channel binding
 
 - **Bind mod3 seats to the real Claude Code session_id.** Each Claude Code session now registers a distinct channel-client seat instead of all sessions collapsing into the legacy `"main"` sentinel. `clients/channel_client.py` reads `~/.claude/sessions/<parent-pid>.json` at startup to discover the harness session_id; the kernel's `/v1/claude-code/spawn` flow continues to pass `--session <id>` directly via a temp `.mcp.json`. Dashboard `sessions.html` posts `mod3:claude-code-spawned` (same-origin) to its opener after spawning; `index.html` listens, polls `/v1/sessions/<id>/seats` until the seat appears, then calls `acpTransport.sessionResume(session_id)` to bind its ACP connection. New `AcpTransport.sessionResume(sessionId)` method wraps the existing server-side `/ws/acp` `session/resume` handler. (#103)
