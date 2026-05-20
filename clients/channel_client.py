@@ -83,8 +83,8 @@ _CLAUDE_SESSIONS_DIR = Path.home() / ".claude" / "sessions"
 
 def _resolve_claude_session_id(
     *,
-    poll_timeout_s: float = 10.0,
-    poll_interval_s: float = 0.1,
+    poll_timeout_s: float = 60.0,
+    poll_interval_s: float = 0.2,
 ) -> str | None:
     """Find the harness session_id of the Claude Code process that spawned us.
 
@@ -93,15 +93,23 @@ def _resolve_claude_session_id(
     sees its parent's PID via ``os.getppid()``. We compute the parent-chain
     of candidate PIDs once, then poll for ANY of their state files to appear.
 
-    The poll handles a real startup race: empirically, the channel_client is
-    spawned about 2 seconds after claude starts, but claude writes its state
-    file later (after its own initialization completes, several seconds in).
-    Without polling, a single up-front check fails, the resolver returns None,
-    and every session falls back to the ``main`` sentinel — the exact bug
-    that PRs #103 + #105 were intended to fix.
+    Two empirically-observed quirks shape this:
 
-    Returns the sessionId string, or ``None`` if no claude ancestor produces
-    a state file before the deadline.
+    1. **Startup race.** The channel_client is spawned about 2 seconds after
+       claude starts, but claude writes its state file LATER — observed
+       ~35 seconds after channel_client launch on this machine. So the poll
+       deadline must be generous; 60s is comfortably above the worst case
+       seen but still bounds the wait for non-Claude MCP clients.
+
+    2. **Ancestry chain may not contain the claude PID at all** in pre-warm
+       spare configurations where the spare gets re-claimed. Fallback: if
+       the parent-chain poll times out, look at the most-recently-modified
+       state file in ``~/.claude/sessions/`` — assume it belongs to the
+       claude process that's actively driving this MCP child. Best-effort
+       guess but better than collapsing to ``main`` and breaking the loop.
+
+    Returns the sessionId string, or ``None`` if no candidate file is found
+    within the deadline AND the directory has no recently-modified files.
     """
     import time
 
@@ -119,25 +127,81 @@ def _resolve_claude_session_id(
             break
         candidates.append(pid)
         pid = _read_parent_pid(pid)
-    if not candidates:
-        return None
 
     deadline = time.monotonic() + poll_timeout_s
-    while True:
+    while candidates:
         for cand_pid in candidates:
-            session_file = _CLAUDE_SESSIONS_DIR / f"{cand_pid}.json"
-            if not session_file.is_file():
-                continue
-            try:
-                payload = json.loads(session_file.read_text())
-            except (OSError, json.JSONDecodeError):
-                continue
-            sid = payload.get("sessionId")
-            if isinstance(sid, str) and sid:
+            sid = _read_session_id(_CLAUDE_SESSIONS_DIR / f"{cand_pid}.json")
+            if sid:
                 return sid
         if time.monotonic() >= deadline:
-            return None
+            break
         time.sleep(poll_interval_s)
+
+    # Parent-chain poll didn't yield. Fall back to the most-recently-modified
+    # state file in the directory. This handles bg-spare/wrapper interposition
+    # where the channel_client's ancestry doesn't actually trace back to the
+    # claude process currently driving it.
+    return _most_recent_state_file_session_id()
+
+
+def _read_session_id(session_file: "Path") -> str | None:
+    if not session_file.is_file():
+        return None
+    try:
+        payload = json.loads(session_file.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    sid = payload.get("sessionId")
+    return sid if isinstance(sid, str) and sid else None
+
+
+def _most_recent_state_file_session_id() -> str | None:
+    """Find the most-recently-modified ``~/.claude/sessions/<PID>.json``
+    whose PID is still alive, and return its sessionId. Liveness — not file
+    mtime — is the freshness signal: Claude Code only updates the state
+    file on status changes, so an active session can have an mtime of many
+    minutes ago. We skip files whose owning PID has died (abandoned state).
+    """
+    try:
+        files = list(_CLAUDE_SESSIONS_DIR.glob("*.json"))
+    except OSError:
+        return None
+    if not files:
+        return None
+    files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+    for f in files:
+        # File name is <PID>.json
+        try:
+            pid = int(f.stem)
+        except ValueError:
+            continue
+        if not _pid_is_alive(pid):
+            continue
+        sid = _read_session_id(f)
+        if sid:
+            return sid
+    return None
+
+
+def _pid_is_alive(pid: int) -> bool:
+    """Return True if a process with this PID exists. Sends signal 0
+    (kernel-level check, no actual signal delivered)."""
+    if pid <= 1:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except (ProcessLookupError, PermissionError):
+        # PermissionError means the process exists but we can't signal it;
+        # that's still 'alive' for our purposes.
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        return True
+    except OSError:
+        return False
 
 
 def _read_parent_pid(pid: int) -> int:
