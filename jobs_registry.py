@@ -158,6 +158,35 @@ def _model_registry() -> dict[str, dict[str, Any]]:
     return engine_module.MODELS if engine_module is not None else _MODEL_REGISTRY
 
 
+def _voice_catalog() -> dict[str, dict[str, Any]]:
+    """Shared voice catalog (built-ins + registered clone profiles).
+
+    Delegates to engine.voice_catalog() so the MCP list_voices tool and the
+    HTTP GET /v1/voices handler return the same voice set. Falls back to the
+    static registry shape only if the engine module cannot be imported.
+    """
+    engine_module, _ = _try_engine_module()
+    if engine_module is not None and hasattr(engine_module, "voice_catalog"):
+        return engine_module.voice_catalog()
+
+    catalog: dict[str, dict[str, Any]] = {}
+    for name, cfg in _model_registry().items():
+        supports = []
+        if cfg.get("supports_speed"):
+            supports.append("speed")
+        if cfg.get("supports_exaggeration"):
+            supports.append("emotion")
+        if cfg.get("supports_pitch"):
+            supports.append("pitch")
+        catalog[name] = {
+            "model_id": cfg.get("id"),
+            "voices": list(cfg["voices"]),
+            "default_voice": cfg.get("default_voice"),
+            "supports": supports,
+        }
+    return catalog
+
+
 def _adaptive_player_class():
     from adaptive_player import AdaptivePlayer
 
@@ -1734,17 +1763,10 @@ def list_voices() -> str:
     if _get_voice_module() is None:
         logger.warning("list_voices called without a registered bus voice module")
 
-    models = _model_registry()
+    models = _voice_catalog()
     lines = []
     for engine, cfg in models.items():
-        extras = []
-        if cfg.get("supports_speed"):
-            extras.append("speed")
-        if cfg.get("supports_exaggeration"):
-            extras.append("emotion")
-        if cfg.get("supports_pitch"):
-            extras.append("pitch")
-        tag = f" ({', '.join(extras)})" if extras else ""
+        tag = f" ({', '.join(cfg['supports'])})" if cfg.get("supports") else ""
         lines.append(f"  {engine}{tag}: {', '.join(cfg['voices'])}")
     return "Available voices:\n" + "\n".join(lines)
 

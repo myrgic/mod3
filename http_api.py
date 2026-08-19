@@ -1179,30 +1179,9 @@ def get_job(job_id: str):
 @app.get("/v1/voices")
 def voices():
     """List available engines and their voices, including registered profiles."""
-    engines = {}
-    for name, cfg in MODELS.items():
-        supports = []
-        if cfg.get("supports_speed"):
-            supports.append("speed")
-        if cfg.get("supports_exaggeration"):
-            supports.append("emotion")
-        if cfg.get("supports_pitch"):
-            supports.append("pitch")
-        engines[name] = {
-            "model_id": cfg["id"],
-            "voices": list(cfg["voices"]),
-            "default_voice": cfg["default_voice"],
-            "supports": supports,
-        }
+    from engine import voice_catalog
 
-    # Merge registered voice profiles into their parent engine's voice list.
-    for profile in _registry.list():
-        if profile.engine not in engines:
-            continue
-        engines[profile.engine]["voices"].append(profile.name)
-        engines[profile.engine].setdefault("custom_voices", []).append(profile.name)
-
-    return {"engines": engines}
+    return {"engines": voice_catalog(_registry)}
 
 
 # ---------------------------------------------------------------------------

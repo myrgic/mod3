@@ -38,6 +38,51 @@ def _get_profile_registry():
     return _profile_registry
 
 
+def voice_catalog(registry=None) -> dict[str, dict]:
+    """Single source of truth for "what voices exist".
+
+    Returns {engine_name: {model_id, voices, default_voice, supports,
+    custom_voices?}} where ``voices`` is the built-in preset list PLUS any
+    registered voice-clone profiles bound to that engine. Both the HTTP
+    ``GET /v1/voices`` handler and the MCP ``list_voices`` tool call this so
+    the two surfaces can never drift apart again.
+
+    ``registry`` overrides the lazy module singleton — callers holding their
+    own VoiceProfileRegistry (and tests) pass theirs in.
+    """
+    engines: dict[str, dict] = {}
+    for name, cfg in MODELS.items():
+        supports = []
+        if cfg.get("supports_speed"):
+            supports.append("speed")
+        if cfg.get("supports_exaggeration"):
+            supports.append("emotion")
+        if cfg.get("supports_pitch"):
+            supports.append("pitch")
+        engines[name] = {
+            "model_id": cfg["id"],
+            "voices": list(cfg["voices"]),
+            "default_voice": cfg["default_voice"],
+            "supports": supports,
+        }
+
+    if registry is None:
+        registry = _get_profile_registry()
+    if registry is not None:
+        try:
+            profiles = registry.list()
+        except Exception as exc:  # pragma: no cover - defensive
+            _log.warning("voice profile listing failed: %s", exc)
+            profiles = []
+        for profile in profiles:
+            if profile.engine not in engines:
+                continue
+            engines[profile.engine]["voices"].append(profile.name)
+            engines[profile.engine].setdefault("custom_voices", []).append(profile.name)
+
+    return engines
+
+
 # ---------------------------------------------------------------------------
 # Model registry
 # ---------------------------------------------------------------------------
@@ -433,6 +478,7 @@ def generate_audio(
         for result in model.generate(**gen_kwargs):
             audio = np.array(result.audio).flatten().astype(np.float32)
             metadata = {
+                "engine": engine,
                 "gen_time_sec": round(result.processing_time_seconds, 4),
                 "rtf": round(result.real_time_factor, 2),
                 "samples": int(result.samples),
