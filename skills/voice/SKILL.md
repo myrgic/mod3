@@ -1,3 +1,9 @@
+---
+name: cog-voice
+description: Dual-modal communication via the Mod³ TTS server — when to speak vs write, non-blocking speech discipline, reading voice metrics, anti-patterns. Use when voice output is wanted alongside text.
+type: skill
+---
+
 # Voice — Dual-Modal Communication via Mod³
 
 You have a voice. Use it intentionally.
@@ -56,11 +62,44 @@ speech_status(job_id)  → check metrics if needed
 
 ## Voice Selection
 
+**Cog's voice is `eng_uk_m_davids` on chatterbox-turbo.** Recorded at
+`cog:mem/semantic/insights/cog-voice-preference.cog.md`. Use it unless the
+moment calls for something else. The old `bm_lewis` default was inherited
+plumbing, not a choice.
+
 Multiple engines are available. Pick based on the moment:
 
-- **Default (bm_lewis @ 1.25x):** Kokoro British male. Fast, clear, good for casual speech.
-- **Voxtral voices (casual_male, neutral_female, etc.):** Higher quality, slower TTFA. Use for longer, more considered speech.
-- **Chatterbox:** Emotion control via speed param (0=flat, 1=expressive). Use when emotional tone matters.
+- **Default (eng_uk_m_davids):** chatterbox-turbo, British male. Warm RTF ~1.3-1.8, faster than realtime.
+- **Kokoro (bm_lewis, af_heart, ...):** fastest TTFA (~58ms), supports speed + ALL CAPS emphasis. Use when latency dominates.
+- **Voxtral voices (casual_male, neutral_female, etc.):** best raw quality, zero control surfaces, brutal ~60s cold load. Use sparingly.
+- **Chatterbox (full, not turbo):** the ONLY engine that honors `emotion`. Turbo silently ignores it. One stock voice unless you pass `ref_audio`.
+
+`chatterbox-turbo` also carries 59 clone profiles — `attenborough`, `sagan`,
+`einstein`, `frasier`, `her`, `kronk`, plus regional English sets. Call
+`list_voices` to see them (fixed 2026-08-19; older builds hid all but one).
+
+## Rendering to a File vs Playing Aloud
+
+Two surfaces. Confusing them is the most common mistake:
+
+| Path | Effect | Use when |
+|---|---|---|
+| MCP `speak` | **Plays out of darkstar's physical speakers** | Chaz is at the machine |
+| HTTP `POST /v1/synthesize` | **Returns bytes, silent** | Sending audio over Discord/Telegram |
+
+From a chat platform, `speak` fires audio into an empty room. Use the HTTP path:
+
+```
+curl -s -X POST http://127.0.0.1:7860/v1/synthesize \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"...","voice":"eng_uk_m_davids","format":"ogg"}' \
+  -D /tmp/hdr.txt -o /tmp/out.ogg
+ffmpeg -y -loglevel error -i /tmp/out.ogg -c:a libmp3lame -b:a 128k /tmp/out.mp3
+```
+
+Transcode to mp3 — Discord will not inline `.ogg`. Metrics return in
+`x-mod3-*` headers.
+
 
 ## Reading the Metrics
 
