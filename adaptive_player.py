@@ -22,7 +22,9 @@ The policy math above is pure (inputs -> buffer_ms); AdaptivePlayer's
 runtime wiring only gathers inputs and calls it.
 """
 
+import os
 import sys
+import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -31,6 +33,116 @@ from threading import Event, Lock
 import httpx
 import numpy as np
 import sounddevice as sd
+
+# ---------------------------------------------------------------------------
+# Silent-audio guard
+# ---------------------------------------------------------------------------
+#
+# Mod3's tests spin up real server subprocesses and drive real playback
+# endpoints (see tests/test_server_topology.py, which POSTs /v1/speak to get
+# an in-flight job it can poll). Those daemons opened the operator's actual
+# speakers, so running the suite made the machine talk out loud.
+#
+# The test fixtures were already careful about every OTHER shared resource --
+# the mic is disabled, the barge-in signal and speaking-lock paths are
+# redirected into tmp_path, the LM Studio probe is turned off -- but the
+# audio device was the one global nobody isolated, because silencing it
+# required a seam that did not exist.
+#
+# This is that seam. MOD3_SILENT_AUDIO=1 swaps sd.OutputStream for a
+# drop-in null stream that runs the identical callback on a timer thread and
+# discards the samples. Timing, buffer accounting, underrun counts, drain
+# semantics and CallbackStop all behave as before -- the audio just goes
+# nowhere. Tests that assert on playback metrics still pass; the room stays
+# quiet.
+#
+# Deliberately a runtime env check rather than an import-time constant, so a
+# test can monkeypatch os.environ per-case without reimporting the module.
+
+
+def silent_audio_enabled() -> bool:
+    """True when MOD3_SILENT_AUDIO requests a null output device.
+
+    Set MOD3_SILENT_AUDIO=1 in any context that must not open the operator's
+    real speakers -- test fixtures, CI, headless boxes, or an agent driving
+    mod3 from a chat platform where playback would fire into an empty room.
+    """
+    return os.environ.get("MOD3_SILENT_AUDIO", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+class _NullOutputStream:
+    """Drop-in sd.OutputStream that discards audio instead of playing it.
+
+    Signature-compatible with the real thing. Drives ``callback`` from a
+    daemon thread at the same cadence the audio device would (blocksize /
+    samplerate), so every buffer-health metric AdaptivePlayer derives from
+    callback timing stays meaningful. Honors sd.CallbackStop the way
+    PortAudio does: stop feeding, then fire ``finished_callback`` exactly
+    once.
+    """
+
+    def __init__(
+        self,
+        samplerate: int,
+        channels: int,
+        dtype: str,
+        device=None,
+        callback=None,
+        finished_callback=None,
+        blocksize: int = 2048,
+        **_ignored,
+    ):
+        self.samplerate = samplerate
+        self.channels = channels
+        self.dtype = dtype
+        self.device = device
+        self.blocksize = blocksize
+        self._callback = callback
+        self._finished_callback = finished_callback
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._finished_fired = False
+
+    def start(self):
+        self._thread = threading.Thread(target=self._run, name="mod3-null-audio", daemon=True)
+        self._thread.start()
+
+    def _run(self):
+        interval = self.blocksize / float(self.samplerate)
+        outdata = np.zeros((self.blocksize, self.channels), dtype=np.float32)
+        next_tick = time.perf_counter()
+        while not self._stop.is_set():
+            outdata.fill(0.0)
+            try:
+                if self._callback is not None:
+                    self._callback(outdata, self.blocksize, None, None)
+            except sd.CallbackStop:
+                break
+            except Exception:  # noqa: BLE001 — mirror PortAudio: a raising callback ends the stream
+                break
+            next_tick += interval
+            sleep_for = next_tick - time.perf_counter()
+            if sleep_for > 0:
+                if self._stop.wait(sleep_for):
+                    break
+            else:
+                next_tick = time.perf_counter()
+        self._fire_finished()
+
+    def _fire_finished(self):
+        if not self._finished_fired:
+            self._finished_fired = True
+            if self._finished_callback is not None:
+                self._finished_callback()
+
+    def stop(self):
+        self._stop.set()
+        if self._thread is not None and self._thread.is_alive():
+            self._thread.join(timeout=2.0)
+        self._fire_finished()
+
+    def close(self):
+        self.stop()
 
 # ---------------------------------------------------------------------------
 # Buffer policy — pure functions (inputs -> buffer_ms). Unit-tested in
@@ -259,7 +371,7 @@ class AdaptivePlayer:
         self._buffer_lock = Lock()
 
         # Stream
-        self._stream: sd.OutputStream | None = None
+        self._stream: sd.OutputStream | _NullOutputStream | None = None
         self._playing = False
         self._drain_event = Event()
         self._stream_finished = Event()  # set by sounddevice finished_callback
@@ -471,7 +583,8 @@ class AdaptivePlayer:
     def _start_stream(self):
         self._stream_finished.clear()
         resolved = self._resolve_device()
-        self._stream = sd.OutputStream(
+        stream_cls = _NullOutputStream if silent_audio_enabled() else sd.OutputStream
+        self._stream = stream_cls(
             samplerate=self.sample_rate,
             channels=1,
             dtype="float32",
