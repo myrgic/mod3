@@ -33,7 +33,12 @@ from .health import (
     VadFilterResponse,
 )
 from .jobs import JobListResponse
-from .sessions import SessionListResponse, SessionRegisterRequest, SessionSubscribersResponse
+from .sessions import (
+    SessionListResponse,
+    SessionRegisterRequest,
+    SessionSubscribersResponse,
+    SessionVoiceRequest,
+)
 from .synthesize import SpeakRequest, SpeechRequest, SynthesizeRequest
 from .vad_filter import VadCheckResponse
 from .voice_profiles import (
@@ -69,6 +74,7 @@ __all__ = [
     # sessions
     "SessionListResponse",
     "SessionRegisterRequest",
+    "SessionVoiceRequest",
     "SessionSubscribersResponse",
     # jobs
     "JobListResponse",

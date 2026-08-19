@@ -76,6 +76,7 @@ from schemas.http import (
     CompositionUpdateRequest,
     RegisterProfileRequest,
     SessionRegisterRequest,
+    SessionVoiceRequest,
     ShutdownRequest,
     SpeakRequest,
     SpeechRequest,
@@ -159,17 +160,30 @@ async def _lifespan(application: FastAPI):
     #
     #    We only guarantee 'main'; other sessions are created on explicit request.
     #    Idempotent: re-registering an existing session_id updates metadata without
-    #    touching the assigned voice (see SessionRegistry.register).
+    #    touching the assigned voice (see SessionRegistry.register) — so when
+    #    MOD3_DEFAULT_VOICE is set we follow up with an explicit set_voice() to
+    #    make the default authoritative even on a warm registry.
     _MAIN_SESSION_ID = "main"
+    _default_voice = (os.environ.get("MOD3_DEFAULT_VOICE") or "").strip() or None
     try:
         _sr = get_default_registry()
         _sr_result = _sr.register(
             session_id=_MAIN_SESSION_ID,
             participant_id="channel-client-pool",
             participant_type="agent",
-            preferred_voice=None,
+            preferred_voice=_default_voice,
             preferred_output_device="system-default",
         )
+        if _default_voice and _sr_result.session.assigned_voice != _default_voice:
+            _sr.set_voice(_MAIN_SESSION_ID, _default_voice)
+        if _default_voice:
+            _live = _sr.get(_MAIN_SESSION_ID)
+            logger.info(
+                "session '%s' startup voice from MOD3_DEFAULT_VOICE=%s (assigned=%s)",
+                _MAIN_SESSION_ID,
+                _default_voice,
+                _live.assigned_voice if _live is not None else "?",
+            )
         if _sr_result.created:
             logger.info("auto-created session '%s' on startup", _MAIN_SESSION_ID)
         else:
@@ -1786,6 +1800,15 @@ def session_register(req: SessionRegisterRequest):
 
     payload = result.session.to_dict(device_resolver=resolve_output_device)
     payload["created"] = result.created
+    # Backward-compatible warning: registration is idempotent on voice, so a
+    # preferred_voice on an existing session is discarded. Say so instead of
+    # silently returning the old voice (that silence hid a real bug).
+    if result.voice_ignored:
+        payload["voice_ignored"] = result.voice_ignored
+        payload["warning"] = (
+            f"preferred_voice {result.voice_ignored!r} ignored — session already assigned "
+            f"{result.session.assigned_voice!r}. Use PATCH /v1/sessions/{req.session_id}/voice to change it."
+        )
     # Top-level live device snapshot so the caller does not have to
     # round-trip; the nested one is available for debugging.
     payload["output_device"] = registry.resolve_device(result.session.session_id).to_dict()
@@ -1799,6 +1822,30 @@ def session_deregister(session_id: str):
     result = registry.deregister(session_id)
     if result.get("status") == "not_found":
         return JSONResponse(status_code=404, content=result)
+    return result
+
+
+@app.patch("/v1/sessions/{session_id}/voice")
+def session_set_voice(session_id: str, req: SessionVoiceRequest):
+    """Change an already-registered session's assigned voice.
+
+    ``POST /v1/sessions/register`` is idempotent and will NOT change the voice
+    of an existing session; this is the explicit update path. Routes through
+    ``SessionRegistry.set_voice`` → ``_allocate_voice`` so ``voice_conflict``
+    is computed exactly as it is at initial registration.
+
+    Body: ``{"voice": "eng_uk_m_davids"}``
+    """
+    registry = get_default_registry()
+    result = registry.set_voice(session_id, req.voice)
+    status = result.get("status")
+    if status == "not_found":
+        return JSONResponse(status_code=404, content=result)
+    if status == "error":
+        return JSONResponse(status_code=400, content=result)
+    session = registry.get(session_id)
+    if session is not None:
+        result["session"] = session.to_dict(device_resolver=resolve_output_device)
     return result
 
 

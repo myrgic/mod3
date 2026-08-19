@@ -1991,7 +1991,10 @@ def register_session(
         participant_id: Identity of the speaker (e.g., 'cog', 'sandy', 'alice').
         participant_type: 'agent' or 'user'. Free-form beyond that.
         preferred_voice: Optional voice preset. If taken, voice_conflict=true
-                         is returned but assignment still succeeds.
+                         is returned but assignment still succeeds. Only honored
+                         on FIRST registration — for an existing session_id it
+                         is ignored and reported back as voice_ignored; use
+                         set_session_voice to change a live session's voice.
         preferred_output_device: 'system-default' (re-queried per playback),
                                  a device-name substring, or a numeric index.
     """
@@ -2006,6 +2009,12 @@ def register_session(
     payload = result.session.to_dict(device_resolver=resolve_output_device)
     payload["status"] = "ok"
     payload["created"] = result.created
+    if result.voice_ignored:
+        payload["voice_ignored"] = result.voice_ignored
+        payload["warning"] = (
+            f"preferred_voice {result.voice_ignored!r} ignored — session already assigned "
+            f"{result.session.assigned_voice!r}. Use set_session_voice to change it."
+        )
     # Also expose a live-resolved device at the top level for convenience —
     # callers can log or display it without walking nested keys.
     live = registry.resolve_device(result.session.session_id)
@@ -2025,6 +2034,36 @@ def deregister_session(session_id: str) -> str:
     """Release a session's voice and drop its pending jobs."""
     registry = get_default_registry()
     result = registry.deregister(session_id)
+    return json.dumps(result)
+
+
+@mcp.tool(
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    }
+)
+def set_session_voice(session_id: str, voice: str) -> str:
+    """Change an already-registered session's assigned voice.
+
+    ``register_session`` is idempotent and will NOT change the voice of a
+    session that already exists — it returns ``voice_ignored`` in that case.
+    This is the explicit update path. Conflict detection is identical to
+    initial registration: if another session already holds ``voice`` the
+    assignment still succeeds but ``voice_conflict=true`` is returned.
+
+    Args:
+        session_id: The session to retune (e.g. 'main').
+        voice: Voice preset to assign (e.g. 'eng_uk_m_davids').
+    """
+    registry = get_default_registry()
+    result = registry.set_voice(session_id, voice)
+    if result.get("status") == "ok":
+        session = registry.get(session_id)
+        if session is not None:
+            result["session"] = session.to_dict(device_resolver=resolve_output_device)
     return json.dumps(result)
 
 

@@ -624,6 +624,12 @@ class RegistrationResult:
     session: SessionChannel
     created: bool  # False when re-registering an existing session_id
     voice_conflict: bool
+    # Set when the caller asked for a preferred_voice on a re-registration and
+    # the registry declined to change the already-assigned voice. Registration
+    # is idempotent on voice by design; without this the discard was silent
+    # (the caller got preferred_voice=null back and no way to detect it).
+    # Use set_voice() / PATCH /v1/sessions/{id}/voice to actually change it.
+    voice_ignored: str | None = None
 
 
 class SessionRegistry:
@@ -796,8 +802,25 @@ class SessionRegistry:
                 existing.preferred_output_device = preferred_output_device or "system-default"
                 existing.last_active = self._now()
                 # Don't reshuffle voice on re-register. If the caller wants a
-                # different voice they should deregister first.
-                return RegistrationResult(existing, created=False, voice_conflict=existing.voice_conflict)
+                # different voice they should use set_voice() (PATCH
+                # /v1/sessions/{id}/voice). Surface the discard rather than
+                # dropping it silently.
+                ignored = None
+                if preferred_voice and preferred_voice != existing.assigned_voice:
+                    ignored = preferred_voice
+                    logger.info(
+                        "register(%s): preferred_voice=%r ignored — session already assigned %r "
+                        "(use set_voice to change it)",
+                        session_id,
+                        preferred_voice,
+                        existing.assigned_voice,
+                    )
+                return RegistrationResult(
+                    existing,
+                    created=False,
+                    voice_conflict=existing.voice_conflict,
+                    voice_ignored=ignored,
+                )
 
             voice, conflict = self._allocate_voice(session_id, preferred_voice)
             _now = self._now()
@@ -845,6 +868,58 @@ class SessionRegistry:
                 "session_id": session_id,
                 "released_voice": session.assigned_voice,
                 "dropped_jobs": dropped,
+            }
+
+    def set_voice(self, session_id: str, voice: str) -> dict[str, Any]:
+        """Change an already-registered session's assigned voice.
+
+        Goes through ``_allocate_voice`` so the existing ``voice_conflict``
+        semantics are preserved (voice is identity, not exclusive: a second
+        claimant is honored but flagged). The previously held voice is
+        released back to the pool if this session still held it.
+
+        Returns ``{"status": "not_found"}`` for an unknown session_id.
+        """
+        if not voice:
+            return {"status": "error", "error": "voice must be a non-empty string"}
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if session is None:
+                return {"status": "not_found", "session_id": session_id}
+            previous = session.assigned_voice
+            if previous == voice:
+                session.preferred_voice = voice
+                session.last_active = self._now()
+                return {
+                    "status": "ok",
+                    "session_id": session_id,
+                    "previous_voice": previous,
+                    "assigned_voice": previous,
+                    "voice_conflict": session.voice_conflict,
+                    "changed": False,
+                }
+            # Release the old claim first so the pool stays accurate.
+            if self._voice_holder.get(previous) == session_id:
+                del self._voice_holder[previous]
+            assigned, conflict = self._allocate_voice(session_id, voice)
+            session.assigned_voice = assigned
+            session.preferred_voice = voice
+            session.voice_conflict = conflict
+            session.last_active = self._now()
+            logger.info(
+                "set_voice: session=%s %s -> %s conflict=%s",
+                session_id,
+                previous,
+                assigned,
+                conflict,
+            )
+            return {
+                "status": "ok",
+                "session_id": session_id,
+                "previous_voice": previous,
+                "assigned_voice": assigned,
+                "voice_conflict": conflict,
+                "changed": True,
             }
 
     def get(self, session_id: str) -> SessionChannel | None:
