@@ -161,6 +161,19 @@ class SeatRegistry:
         with self._lock:
             return {sid for sid, n in self._live_streams.items() if n > 0}
 
+    def session_seat_count(self, session_id: str) -> int:
+        """Return how many seats are currently registered under *session_id*.
+
+        Minimal accessor for callers (e.g. the seat-revoke HTTP handler) that
+        need to know whether a session still has live seats before cascading
+        a teardown to an external system. Mirrors the live-stream accounting
+        above (``has_live_stream`` / ``live_session_ids``) but counts
+        registered seats rather than open SSE connections, since a seat can
+        be revoked independently of its SSE stream's lifecycle.
+        """
+        with self._lock:
+            return len(self._seats.get(session_id, {}))
+
     # ------------------------------------------------------------------
     # Seat lifecycle
     # ------------------------------------------------------------------
