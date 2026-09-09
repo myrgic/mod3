@@ -118,6 +118,20 @@ def _start_inbound_pipeline_if_enabled() -> Any | None:
         return None
 
 
+def _warn_self_access_policy() -> None:
+    """Log once at startup if the effective mod3 access policy is 'self'.
+
+    Best-effort: access.py has no heavy deps, but guard the import anyway
+    so a packaging regression there cannot abort HTTP server startup.
+    """
+    try:
+        import access
+
+        access.warn_if_self_policy()
+    except Exception:
+        logger.debug("access policy startup check failed", exc_info=True)
+
+
 def _prewarm_tts_if_enabled() -> None:
     """Fire-and-forget Kokoro pre-warm so the first real synthesize call is fast.
 
@@ -154,6 +168,7 @@ def _run_http(host: str = "127.0.0.1", port: int = 7860):
     install_mcp_route(app)
     inbound_pipeline: Any | None = None
     try:
+        _warn_self_access_policy()
         inbound_pipeline = _start_inbound_pipeline_if_enabled()
         _prewarm_tts_if_enabled()
         uvicorn.run(app, host=host, port=port, log_level="info")
