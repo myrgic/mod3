@@ -18,6 +18,24 @@ Policy semantics
                identifier appears in allow[].
   deny       — all connections refused (maintenance / lockdown mode).
 
+policy=self and tunneled deployments
+-------------------------------------
+`policy=self` trusts every loopback client unconditionally (see
+`is_localhost`) — it has no notion of *which* process on 127.0.0.1 opened
+the connection, only that the peer address is loopback. That is the right
+model for a bare local daemon. It stops being the right model the moment
+anything else binds loopback in front of mod3: an ngrok/cloudflared/ssh -L
+tunnel, a reverse proxy, or any other forwarder that terminates on
+127.0.0.1 and relays external traffic in. From mod3's side, a request
+relayed by that forwarder is indistinguishable from a request from the
+operator's own shell — `policy=self` extends its trust to it automatically.
+mod3 cannot see or enumerate what else is bound to loopback, so it cannot
+detect this case itself; a startup log line (`warn_if_self_policy`) is the
+current mitigation. Any deployment that puts a tunnel or forwarder in
+front of mod3 should run `policy=allowlist` instead, so remote traffic
+must pair through an explicit identifier rather than inheriting loopback
+trust.
+
 Pairing flow (for non-localhost clients)
 -----------------------------------------
 1. Remote client connects with a stable device UUID (header or WS sub-protocol).
@@ -63,6 +81,11 @@ _CODE_LENGTH = 5
 _DEFAULT_EXPIRE_SECONDS = 600  # 10 minutes
 
 _LOCALHOST_ADDRS = frozenset({"127.0.0.1", "::1", "localhost", "0:0:0:0:0:0:0:1"})
+
+# Set by warn_if_self_policy() the first time it runs, so a long-lived
+# process doesn't re-log the same warning on every call site that happens
+# to invoke it (e.g. a health check, or a future per-request path).
+_self_policy_warned = False
 
 
 def _config_path() -> Path:
@@ -155,6 +178,39 @@ def is_allowed(identifier: str, host: str = "") -> bool:
 
     logger.info("access denied (not in allowlist): identifier=%s", identifier)
     return False
+
+
+def warn_if_self_policy() -> None:
+    """Log once, at startup, if the effective access policy is 'self'.
+
+    'self' trusts every loopback (127.0.0.1 / ::1) client unconditionally —
+    it cannot tell an operator's own shell apart from a tunnel/forwarder
+    (ngrok, cloudflared, ssh -L, a reverse proxy) that also terminates on
+    loopback and relays external traffic in. That forwarder's remote
+    clients inherit 'self' trust with no pairing step. This is correct and
+    intended for a bare local daemon; it is a silent trust-boundary hole
+    for any deployment fronted by a loopback-bound forwarder. See the
+    module docstring's "policy=self and tunneled deployments" section and
+    CHANNELS.md. No-op (and does not re-log) once already warned in this
+    process, and no-op entirely when the effective policy is not 'self'.
+    """
+    global _self_policy_warned
+    if _self_policy_warned:
+        return
+
+    with _file_lock:
+        data = _load()
+    policy = data.get("policy", "self")
+
+    if policy == "self":
+        logger.warning(
+            "mod3 access policy is 'self': every loopback (127.0.0.1 / ::1) client is "
+            "trusted with no pairing. If mod3 is reachable through a tunnel or forwarder "
+            "bound to loopback (ngrok, cloudflared, ssh -L, a reverse proxy), that "
+            "forwarder's remote clients inherit this trust. Use policy=allowlist for any "
+            "tunneled deployment. See access.py's module docstring and CHANNELS.md."
+        )
+        _self_policy_warned = True
 
 
 def _generate_code() -> str:

@@ -102,6 +102,19 @@ Access is governed by `~/.claude/channels/mod3/access.json` via `access.py`.
 
 **Localhost connections (same machine) are auto-allowed** regardless of policy.
 
+**`policy=self` trusts every loopback client, full stop.** It has no way to
+tell the operator's own shell apart from a tunnel or forwarder (ngrok,
+cloudflared, `ssh -L`, a reverse proxy) that also terminates on 127.0.0.1
+and relays external traffic in — that forwarder's remote clients inherit
+`self`'s trust with no pairing step, because mod3 only ever sees the
+loopback peer address. `self` is correct for a bare local daemon; it is a
+silent trust-boundary hole for any deployment fronted by a loopback-bound
+forwarder. **Use `policy=allowlist` for any tunneled deployment** so
+remote traffic must pair through an explicit identifier instead. mod3
+logs a startup warning (`access.warn_if_self_policy`) whenever the
+effective policy resolves to `self`; see `access.py`'s module docstring
+for the full mechanism.
+
 **Remote clients** must pair:
 
 1. Client connects; the seat registration fails with HTTP 403 and a pairing code.
