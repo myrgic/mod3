@@ -2089,22 +2089,36 @@ def seat_revoke(session_id: str, seat_id: str):
 
     # Fix A — session-registration-unification (SYNC half, deregister cascade):
     # After the local seat is revoked, notify the kernel so it can drop its
-    # ChannelSessionRecord. Best-effort / non-fatal — the seat is already gone
-    # locally; a kernel-side orphan will be cleaned up by Fix B's reaper.
-    try:
-        import httpx as _httpx
-
-        _httpx.post(
-            f"{_cogos_kernel_url}/v1/channel-sessions/{session_id}/deregister",
-            timeout=1.5,
-        )
+    # ChannelSessionRecord — but only once this session has no seats left.
+    # A session can hold multiple seats (e.g. two channel clients attached to
+    # the same voice session); revoking one of them must not tear down the
+    # kernel's record out from under the seats that are still live. Mirrors
+    # the live-stream idle guard's accounting (seats.py SeatRegistry
+    # mark_stream_closed / has_live_stream) but counts registered seats.
+    # Best-effort / non-fatal — a kernel-side orphan will be cleaned up by
+    # Fix B's reaper regardless.
+    remaining = registry.session_seat_count(session_id)
+    if remaining > 0:
         logger.debug(
-            "kernel session-deregister callback OK: session=%s seat=%s",
+            "kernel session-deregister callback skipped: session=%s still has %d live seat(s)",
             session_id,
-            seat_id,
+            remaining,
         )
-    except Exception as _kde:  # noqa: BLE001 — never block seat revoke on kernel callback
-        logger.warning("kernel session-deregister callback failed (non-fatal): %s", _kde)
+    else:
+        try:
+            import httpx as _httpx
+
+            _httpx.post(
+                f"{_cogos_kernel_url}/v1/channel-sessions/{session_id}/deregister",
+                timeout=1.5,
+            )
+            logger.debug(
+                "kernel session-deregister callback OK: session=%s seat=%s",
+                session_id,
+                seat_id,
+            )
+        except Exception as _kde:  # noqa: BLE001 — never block seat revoke on kernel callback
+            logger.warning("kernel session-deregister callback failed (non-fatal): %s", _kde)
 
     return {"status": "revoked", "seat_id": seat_id, "session_id": session_id}
 

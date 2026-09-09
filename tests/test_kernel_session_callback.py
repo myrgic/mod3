@@ -229,3 +229,61 @@ class TestKernelDeregisterCallback:
         )
         data = del_resp.json()
         assert data.get("status") == "revoked"
+
+    def test_seat_revoke_skips_kernel_deregister_when_session_has_other_live_seats(self, client):
+        """Two seats on one session: revoking the first must NOT fire the
+        kernel deregister callback (the session is still live via the second
+        seat), and the session's seat record must survive. Revoking the
+        second (last) seat must fire the callback."""
+        session_id = str(uuid.uuid4())
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+
+        with patch("access.is_allowed", return_value=True), patch("httpx.post", return_value=mock_response):
+            reg1 = client.post(
+                f"/v1/sessions/{session_id}/seats",
+                json={"client_type": "claude-code-channel", "device_uuid": str(uuid.uuid4())},
+                headers={"Host": _GOOD_HOST},
+            )
+            reg2 = client.post(
+                f"/v1/sessions/{session_id}/seats",
+                json={"client_type": "claude-code-channel", "device_uuid": str(uuid.uuid4())},
+                headers={"Host": _GOOD_HOST},
+            )
+        assert reg1.status_code in (200, 201), reg1.text
+        assert reg2.status_code in (200, 201), reg2.text
+        seat_id_1 = reg1.json()["seat_id"]
+        seat_id_2 = reg2.json()["seat_id"]
+
+        # Revoke the first seat. The second seat is still live, so the
+        # kernel deregister callback must NOT be invoked.
+        with patch("httpx.post", return_value=mock_response) as mock_post_1:
+            del_resp_1 = client.delete(f"/v1/sessions/{session_id}/seats/{seat_id_1}", headers={"Host": _GOOD_HOST})
+        assert del_resp_1.status_code == 200, del_resp_1.text
+
+        deregister_calls_1 = [
+            call for call in mock_post_1.call_args_list if f"/v1/channel-sessions/{session_id}/deregister" in str(call)
+        ]
+        assert not deregister_calls_1, (
+            f"kernel deregister must NOT fire while the session still has a live seat, got: {deregister_calls_1}"
+        )
+
+        # The session record survives: the remaining seat is still listed.
+        list_resp = client.get(f"/v1/sessions/{session_id}/seats", headers={"Host": _GOOD_HOST})
+        assert list_resp.status_code == 200, list_resp.text
+        remaining_seat_ids = {s["seat_id"] for s in list_resp.json()["seats"]}
+        assert remaining_seat_ids == {seat_id_2}, f"expected only seat_id_2 to remain, got: {remaining_seat_ids}"
+
+        # Revoke the second (last) seat. Now the kernel deregister callback
+        # must be invoked.
+        with patch("httpx.post", return_value=mock_response) as mock_post_2:
+            del_resp_2 = client.delete(f"/v1/sessions/{session_id}/seats/{seat_id_2}", headers={"Host": _GOOD_HOST})
+        assert del_resp_2.status_code == 200, del_resp_2.text
+
+        deregister_calls_2 = [
+            call for call in mock_post_2.call_args_list if f"/v1/channel-sessions/{session_id}/deregister" in str(call)
+        ]
+        assert deregister_calls_2, (
+            f"kernel deregister must fire once the last seat is revoked, got calls: {mock_post_2.call_args_list}"
+        )
