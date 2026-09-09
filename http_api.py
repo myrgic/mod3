@@ -28,6 +28,7 @@ Endpoints:
 """
 
 import asyncio
+import hashlib
 import io
 import json
 import logging
@@ -2185,6 +2186,25 @@ async def session_message(session_id: str, request: Request):
     input_type = body.get("input_type", "text")
     role = body.get("role", "user")
     originating_seat = body.get("seat_id") or None
+
+    # Sender auth: role=assistant is a caller-supplied claim with no code
+    # backing it (both role and seat_id come straight off the request body).
+    # Without this check any HTTP caller can inject a fake assistant turn into
+    # the session's chat history and every seat's fan-out. The minimum fix is
+    # not a full auth scheme — just require that an assistant-role post name a
+    # seat_id the SeatRegistry actually has registered for this session.
+    if role == "assistant" and (not originating_seat or get_seat_registry().get(session_id, originating_seat) is None):
+        session_fp = hashlib.sha256(session_id.encode()).hexdigest()[:12]
+        logger.warning(
+            "session_message rejected: unregistered seat claiming role=%s (session_fp=%s seat_id_present=%s)",
+            role,
+            session_fp,
+            bool(originating_seat),
+        )
+        return JSONResponse(
+            status_code=403,
+            content={"error": "role=assistant requires a seat_id registered for this session"},
+        )
 
     msg_id = str(uuid.uuid4())[:8]
     try:
