@@ -10,13 +10,13 @@ class _Base(BaseModel):
 
 
 class SynthesizeRequest(_Base):
-    """POST /v1/synthesize — text to audio (WAV, PCM, or OGG/Opus)."""
+    """POST /v1/synthesize — text to audio (WAV, PCM, OGG/Opus, or MP3)."""
 
     text: str
     voice: str = Field(default="bm_lewis")
     speed: float = Field(default=1.25)
     emotion: float = Field(default=0.5)
-    format: str = Field(default="wav", pattern="^(wav|pcm|ogg)$")
+    format: str = Field(default="wav", pattern="^(wav|pcm|ogg|mp3)$")
     # ADR-082 Phase 1: optional session routing. When present, the
     # session's assigned_voice overrides ``voice`` (unless an explicit
     # non-default was passed), and the session is advanced in the global

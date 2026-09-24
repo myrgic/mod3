@@ -425,6 +425,26 @@ def encode_ogg(samples, sample_rate: int) -> bytes:
     return buf.getvalue()
 
 
+def encode_mp3(samples, sample_rate: int) -> bytes:
+    """Encode float32 samples as MP3 (MPEG Layer III).
+
+    Mirrors encode_wav()/encode_ogg() — same inputs, raw bytes out.
+    libsndfile >= 1.1 ships an MPEG encoder, so this needs no ffmpeg
+    shell-out. Exists because chat transports (Discord, Telegram) will
+    inline mp3 but not ogg/opus, and every caller was otherwise forced
+    to transcode after the fact.
+    """
+    import io as _io
+
+    import numpy as np
+    import soundfile as sf
+
+    samples = np.asarray(samples, dtype=np.float32)
+    buf = _io.BytesIO()
+    sf.write(buf, samples, sample_rate, format="MP3", subtype="MPEG_LAYER_III")
+    return buf.getvalue()
+
+
 # ---------------------------------------------------------------------------
 # Request / Response models — imported from schemas.http
 # (SynthesizeRequest, SpeechRequest, ShutdownRequest, SessionRegisterRequest,
@@ -686,6 +706,10 @@ def synthesize(req: SynthesizeRequest):
     elif req.format == "ogg":
         audio_bytes = encode_ogg(all_samples, sample_rate)
         media_type = "audio/ogg; codecs=opus"
+        wav_for_ws = encode_wav(all_samples, sample_rate)  # dashboard always gets WAV
+    elif req.format == "mp3":
+        audio_bytes = encode_mp3(all_samples, sample_rate)
+        media_type = "audio/mpeg"
         wav_for_ws = encode_wav(all_samples, sample_rate)  # dashboard always gets WAV
     else:
         audio_bytes = encode_wav(all_samples, sample_rate)
@@ -2622,8 +2646,14 @@ async def chat_flow_log_stream(
 
 
 @app.get("/health")
+@app.get("/v1/health")
 def health():
-    """Health check — standardized CogOS service format."""
+    """Health check — standardized CogOS service format.
+
+    Served at both /health and /v1/health: every other route on this server
+    is /v1/-prefixed, so /v1/health is the path callers reach for first and
+    it used to 404.
+    """
     try:
         loaded = get_loaded_engines()
 
@@ -2635,7 +2665,12 @@ def health():
         # Modality availability
         modalities = {
             "tts": len(loaded) > 0,
-            "stt": False,  # STT not yet implemented as a server modality
+            # STT is served by /v1/transcribe via a lazily-loaded
+            # WhisperDecoder. It is always available (the decoder loads on
+            # first request), so report it as such — this key read False
+            # long after the endpoint shipped, which made /health disagree
+            # with /capabilities about a working feature.
+            "stt": True,
             "vad": vad_loaded(),
         }
 
@@ -2749,7 +2784,7 @@ def capabilities():
                 "engine": "mlx_whisper",
                 "model": "mlx-community/whisper-large-v3-turbo",
                 "languages": ["en"],
-                "endpoint": None,
+                "endpoint": "/v1/transcribe",
             },
             "vad": {
                 "engine": "silero_v5",
