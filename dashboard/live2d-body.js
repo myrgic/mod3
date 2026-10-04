@@ -177,7 +177,10 @@ export class Live2DBody {
       runtime: "cubism4 / pixi-live2d-display",
       states: STATES,
       params: this.params.manifestParams(),
-      channels: this.channels,
+      // `channels` keeps #154's shape (procedural name -> param id). Clip
+      // channels are a separate, additive field.
+      channels: Object.fromEntries(Object.entries(CHANNEL_PARAM).filter(([, p]) => this.params.has(p))),
+      semantic_channels: this.channels,
       clip_generators: ["const", "keys", "wave", "jitter", "follow"],
       lip_sync: this.params.has("ParamMouthOpenY"),
       adapted_from: "Vroku's Live2D controller suite (Storm/Luna canvas)",
@@ -207,7 +210,8 @@ export class Live2DBody {
     for (const [ch, id] of Object.entries(CHANNEL_PARAM)) if (this.params.has(id)) channels[ch] = round(this.renderedValue(id));
     const semantic = {};
     for (const ch of Object.keys(this.channels)) semantic[ch] = round(this._channelRendered(ch));
-    return { state: this.state, params, held: Object.fromEntries(this.held), channels: semantic, raw: channels, clips: this.clips.list(), t: Date.now() };
+    // `channels` is unchanged from #154; `semantic` and `clips` are new fields.
+    return { state: this.state, params, held: Object.fromEntries(this.held), channels, semantic, clips: this.clips.list(), t: Date.now() };
   }
 
   _channelRendered(ch) {

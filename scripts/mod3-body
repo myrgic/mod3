@@ -148,7 +148,7 @@ def summarize(res: dict) -> None:
         "state": rc.get("state"),
         "running": [c["name"] for c in rc.get("clips", [])],
         "dropped": res.get("rejected") or [],
-        "channels": rc.get("channels"),
+        "channels": rc.get("semantic") or rc.get("channels"),
         "round_trip_ms": res.get("round_trip_ms"),
     }
     print(json.dumps({k: v for k, v in out.items() if v not in (None, [])}, indent=2))
@@ -173,7 +173,8 @@ def main(argv: list[str] | None = None) -> None:
 
     if a.cmd == "bodies":
         for body in http("GET", "/v1/bodies").get("bodies", []):
-            chans = ", ".join(body.get("meta", {}).get("channels", {}) or [])
+            meta = body.get("meta", {})
+            chans = ", ".join(meta.get("semantic_channels") or meta.get("channels") or [])
             print(
                 f"{body['body_id']}  kind={body['kind']}  states={','.join(body['states'])}\n  channels: {chans or '(none declared)'}"
             )

@@ -81,8 +81,8 @@ class _Body:
 
     @property
     def channels(self) -> dict[str, Any]:
-        """Semantic channels this body maps (see clip.CHANNELS)."""
-        ch = self.manifest.get("channels") or {}
+        """Semantic clip channels this body maps (see clip.CHANNELS)."""
+        ch = self.manifest.get("semantic_channels") or {}
         return ch if isinstance(ch, dict) else {}
 
     @property

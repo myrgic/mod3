@@ -112,7 +112,8 @@ MANIFEST = {
     "kind": "live2d",
     "states": ["IDLE"],
     "params": [{"id": "ParamAngleY", "min": -30, "max": 30, "default": 0}],
-    "channels": {"head.y": {"polarity": "bi", "params": ["ParamAngleY"]}},
+    "channels": {"angleY": "ParamAngleY"},
+    "semantic_channels": {"head.y": {"polarity": "bi", "params": ["ParamAngleY"]}},
 }
 
 
@@ -136,7 +137,7 @@ def _fake_body(client, body_id, stop, seen):
             seen.append(msg)
             if msg["type"] == "play":
                 ws.send_json(
-                    {"type": "receipt", "id": msg["id"], "playing": msg["clip"]["name"], "channels": {"head.y": -0.4}}
+                    {"type": "receipt", "id": msg["id"], "playing": msg["clip"]["name"], "semantic": {"head.y": -0.4}}
                 )
             elif msg["type"] == "stop":
                 ws.send_json({"type": "receipt", "id": msg["id"], "stopped": [msg.get("clip")]})
