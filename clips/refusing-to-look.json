@@ -1,0 +1,28 @@
+{
+  "name": "refusing-to-look",
+  "description": "head and body turned hard away, chin down",
+  "credit": "adapted from Vroku's controller suite (state of the same name)",
+  "args": {
+    "intensity": {
+      "default": 1,
+      "min": 0,
+      "max": 1
+    }
+  },
+  "loop": true,
+  "fade_ms": 500,
+  "tracks": {
+    "head.x": {
+      "const": "-intensity",
+      "smooth": 0.075
+    },
+    "head.y": {
+      "const": "-0.333*intensity",
+      "smooth": 0.075
+    },
+    "body.x": {
+      "const": "-intensity",
+      "smooth": 0.06
+    }
+  }
+}

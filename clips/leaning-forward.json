@@ -1,0 +1,28 @@
+{
+  "name": "leaning-forward",
+  "description": "lean in, interested",
+  "credit": "adapted from Vroku's controller suite (state of the same name)",
+  "args": {
+    "lean": {
+      "default": 1,
+      "min": 0,
+      "max": 2
+    }
+  },
+  "loop": true,
+  "fade_ms": 500,
+  "tracks": {
+    "head.x": {
+      "const": 0,
+      "smooth": 0.075
+    },
+    "head.y": {
+      "const": "0.333*lean",
+      "smooth": 0.075
+    },
+    "body.y": {
+      "const": "min(1, lean)",
+      "smooth": 0.06
+    }
+  }
+}

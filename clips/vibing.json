@@ -1,0 +1,47 @@
+{
+  "name": "vibing",
+  "description": "slow head roll and sway, half-smiling eyes",
+  "credit": "adapted from Vroku's controller suite (state of the same name)",
+  "args": {
+    "energy": {
+      "default": 1,
+      "min": 0.1,
+      "max": 2
+    }
+  },
+  "loop": true,
+  "fade_ms": 600,
+  "tracks": {
+    "head.x": {
+      "const": 0,
+      "smooth": 0.075
+    },
+    "head.y": {
+      "wave": {
+        "amp": 0.067,
+        "offset": 0.067,
+        "period_ms": "31416/energy",
+        "phase": 0.25
+      },
+      "smooth": 0.075
+    },
+    "head.z": {
+      "wave": {
+        "amp": 0.35,
+        "period_ms": "31416/energy"
+      },
+      "smooth": 0.075
+    },
+    "body.x": {
+      "wave": {
+        "amp": 0.5,
+        "period_ms": "31416/energy"
+      },
+      "smooth": 0.06
+    },
+    "eyes.smile": {
+      "const": 0.5,
+      "smooth": 0.06
+    }
+  }
+}

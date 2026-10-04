@@ -1,0 +1,60 @@
+{
+  "name": "dancing",
+  "description": "head and body sway in counter-phase, bouncing, eyes smiling",
+  "credit": "adapted from Vroku's controller suite (state of the same name)",
+  "args": {
+    "energy": {
+      "default": 1,
+      "min": 0.1,
+      "max": 2
+    }
+  },
+  "loop": true,
+  "fade_ms": 400,
+  "tracks": {
+    "head.x": {
+      "wave": {
+        "amp": 0.5,
+        "period_ms": "12566/energy"
+      },
+      "smooth": 0.075
+    },
+    "head.y": {
+      "wave": {
+        "amp": 0.133,
+        "offset": 0.133,
+        "period_ms": "6283/energy",
+        "phase": 0.25
+      },
+      "smooth": 0.075
+    },
+    "head.z": {
+      "wave": {
+        "amp": 0.5,
+        "period_ms": "12566/energy",
+        "phase": 0.25
+      },
+      "smooth": 0.075
+    },
+    "body.x": {
+      "wave": {
+        "amp": -0.8,
+        "period_ms": "12566/energy"
+      },
+      "smooth": 0.06
+    },
+    "body.y": {
+      "wave": {
+        "amp": 0.5,
+        "offset": 0.5,
+        "period_ms": "3142/energy",
+        "phase": 0.25
+      },
+      "smooth": 0.06
+    },
+    "eyes.smile": {
+      "const": 1,
+      "smooth": 0.06
+    }
+  }
+}

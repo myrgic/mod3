@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added — Body: agent-authored animation clips and personal libraries
+
+- **Agents animate their bodies with clips: JSON, never code.** `clip.py` compiles a clip (per-channel tracks built from `const`/`keys`/`wave`/`jitter`/`follow`, args with ranges, arithmetic-only expressions resolved server-side) against the connected body's manifest. New endpoints: `POST /v1/bodies/{id}/play`, `/stop`, and `POST /v1/clips/check`. `dashboard/clip-player.js` runs clips on the page, layered over the idle animation and under held params. Semantic channels (`head.x`, `eyes.open`, `mouth.smile`, …) let one clip run on any rig; tracks a body can't drive are dropped and reported.
+- **`scripts/mod3-body`** (stdlib CLI): `list/show/play/try/stop/check/save/fork/rm/act` over the agent's own library (`.cog/body/clips` or `~/.mod3/body/clips`) and the shared starter set in `clips/` (Vroku's controller states rebuilt as clips, plus nod/shake/think). Clip names are slugs, so no path can leave the library. **`skills/body/SKILL.md`** is the shared skill agents inherit.
+- **CI: `Dashboard JS Tests`** runs `node --test tests/*.test.mjs`.
+
 ### Added — CI: cog-review gate (ported from myrgic/cogos)
 
 - **Every same-repo PR now gets an independent AI review.** `.github/workflows/pr-review.yml` runs the `cog-review` agent (read-only tools, canary-proven sandbox) against `.github/pr-review-rubric.md` and posts one GitHub review pinned to the head commit plus one `cog-review` check-run. Fail closed: only an explicit `approve` passes; request-changes, comment, reviewer error, and missing credentials all block. Helpers: `scripts/ci/standing-verdict.sh` (an infra error never demotes a real verdict on the same head) and `scripts/pr-await-review.sh` (the operator-side consumer: exit 0 only on check success plus a genuine bot APPROVED review at the current head).
