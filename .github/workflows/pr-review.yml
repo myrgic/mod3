@@ -115,7 +115,7 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
         run: |
           changed=$(git diff --name-only "origin/$BASE_REF...HEAD")
-          if echo "$changed" | grep -qE '\.(py|js|mjs)$' && ! echo "$changed" | grep -qE '^tests/'; then
+          if echo "$changed" | grep -qE '\.(py|js|mjs|ts)$' && ! echo "$changed" | grep -qE '^tests/'; then
             echo "::warning::Source changed with no test changes. Bug fixes should carry a test that fails without the fix (see .github/pr-review-rubric.md §5)."
           fi
 

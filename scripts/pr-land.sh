@@ -49,16 +49,29 @@ fi
 # 2. All CI green on the same head. Wait for anything still running.
 deadline=$(( $(date +%s) + TIMEOUT ))
 while :; do
+  # One row per check name: the LATEST run (highest id) supersedes earlier
+  # rows for the same name on this SHA. Without this, a flaky cog-review
+  # failure that a later run on the same head replaced with an approve would
+  # block forever (cog-review finding on #156).
   RUNS=$(gh api "repos/$REPO/commits/$HEAD_SHA/check-runs?per_page=100" --paginate \
-    --jq '.check_runs[] | {name, status, conclusion}' | jq -s '.')
+    --jq '.check_runs[] | {id, name, status, conclusion}' |
+    jq -s 'group_by(.name) | map(max_by(.id))')
   PENDING=$(printf '%s' "$RUNS" | jq '[.[] | select(.status != "completed")] | length')
   BAD=$(printf '%s' "$RUNS" | jq -r '[.[] | select(.status == "completed" and (.conclusion | IN("success","skipped","neutral") | not)) | "\(.name)=\(.conclusion)"] | join(", ")')
   TOTAL=$(printf '%s' "$RUNS" | jq 'length')
+  # Don't call CI green before the workflows have registered their checks:
+  # require the gate's own check and every check name branch protection
+  # requires to be present (not a bare row count).
+  REQUIRED=$(gh api "repos/$REPO/branches/$(gh pr view "$PR" -R "$REPO" --json baseRefName --jq .baseRefName)/protection/required_status_checks" \
+    --jq '.contexts' 2>/dev/null || echo '[]')
+  MISSING=$(printf '%s' "$RUNS" | jq -r --argjson req "$REQUIRED" \
+    '. as $runs | [($req + ["cog-review"]) | unique[] | select(. as $n | ($runs | map(.name) | index($n)) == null)] | join(", ")')
   if [ -n "$BAD" ]; then
     echo "pr-land: CI not green on ${HEAD_SHA:0:7}: $BAD" >&2
     exit 5
   fi
-  [ "$PENDING" = "0" ] && [ "$TOTAL" -gt 1 ] && break
+  [ "$PENDING" = "0" ] && [ -z "$MISSING" ] && break
+  [ -n "$MISSING" ] && echo "pr-land: waiting for check(s) to appear: $MISSING" >&2
   if [ "$(date +%s)" -ge "$deadline" ]; then
     echo "pr-land: CI still pending past ${TIMEOUT}s" >&2
     exit 3
