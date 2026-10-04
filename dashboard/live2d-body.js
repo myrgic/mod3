@@ -2,7 +2,11 @@
  * live2d-body.js — a Live2D model as a Mod³ body.
  *
  * Adapted from Vroku's Live2D Cubism 4 controller suite (Storm/Luna canvas,
- * 2025): same Live2DManipulator idea (clamped writes into the Cubism core) and
+ * 2025). Vroku released that code with no restrictions ("unlicensed,
+ * unattributable, use as you want, modify, distribute, no attribution
+ * required", Myrgic Labs #cog-dev, 2026-10-04), so this adaptation ships under
+ * mod3's MIT licence. The credit here is courtesy, not obligation.
+ * Same Live2DManipulator idea (clamped writes into the Cubism core) and
  * the same seven named states, rebuilt as a body an agent can drive:
  *
  *   - declares a manifest (params with ranges + states) on /ws/body/{id}
