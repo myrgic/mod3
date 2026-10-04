@@ -139,6 +139,17 @@ class TestBodyChannel:
             assert e.value.code == 4400
 
 
+class TestNonFinite:
+    def test_nan_and_inf_are_rejected_not_forwarded(self):
+        from body import _Body, validate_command
+
+        b = _Body(body_id="x", manifest=MANIFEST, send=None)
+        for bad in (float("nan"), float("inf"), float("-inf"), "nan"):
+            clean, rejected = validate_command(b, {"params": {"ParamAngleX": bad}})
+            assert "params" not in clean, bad
+            assert rejected == ["ParamAngleX"], bad
+
+
 class TestReplacedConnection:
     """A second connection for the same body_id closes the first (code 4409)."""
 

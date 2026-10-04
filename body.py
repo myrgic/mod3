@@ -30,12 +30,14 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import logging
+import math
 import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
 logger = logging.getLogger("mod3.body")
+_CLOSING: set[asyncio.Task] = set()
 
 
 class BodyError(Exception):
@@ -112,6 +114,11 @@ def validate_command(body: _Body, command: dict[str, Any]) -> tuple[dict[str, An
         except (TypeError, ValueError):
             rejected.append(pid)
             continue
+        if not math.isfinite(v):
+            # NaN slips through min/max (every comparison is False) and inf is
+            # not a pose; reject both rather than forward them to the body.
+            rejected.append(pid)
+            continue
         lo, hi = ranges[pid]
         clean[pid] = min(max(v, lo), hi)
     if clean:
@@ -165,7 +172,9 @@ class BodyRegistry:
             if body.loop is not None and body.loop is not here:
                 asyncio.run_coroutine_threadsafe(body.close(), body.loop)
             elif here is not None:
-                here.create_task(body.close())
+                task = here.create_task(body.close())
+                _CLOSING.add(task)  # asyncio holds tasks weakly; keep it alive
+                task.add_done_callback(_CLOSING.discard)
         except Exception:  # noqa: BLE001 — a dead socket is already closed
             logger.debug("closing replaced body %s failed", body.body_id, exc_info=True)
 
