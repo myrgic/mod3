@@ -3617,8 +3617,14 @@ async def ws_body(websocket: WebSocket, body_id: str):
         await websocket.close(code=4400)
         return
 
+    # Concurrent /act /play requests each send a frame; serialize writes on
+    # this socket. The lock is created here, on the socket's own loop, and
+    # every send (same-loop or run_coroutine_threadsafe) runs on that loop.
+    send_lock = asyncio.Lock()
+
     async def _send(msg: dict) -> None:
-        await websocket.send_json(msg)
+        async with send_lock:
+            await websocket.send_json(msg)
 
     async def _close() -> None:
         await websocket.close(code=4409, reason="replaced by a newer connection for this body id")

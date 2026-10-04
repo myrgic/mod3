@@ -154,7 +154,8 @@ export class Live2DBody {
       if (!this.params.has(id)) continue;
       this.held.set(id, Number(v));
       clearTimeout(this.holdTimers.get(id));
-      if (cmd.hold_ms) this.holdTimers.set(id, setTimeout(() => this.held.delete(id), cmd.hold_ms));
+      // hold_ms is a number when given; 0 means release on the next tick (not "hold forever").
+      if (cmd.hold_ms != null) this.holdTimers.set(id, setTimeout(() => this.held.delete(id), Math.max(0, Number(cmd.hold_ms) || 0)));
     }
     for (const id of cmd.release || []) { this.held.delete(id); clearTimeout(this.holdTimers.get(id)); }
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));

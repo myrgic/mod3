@@ -150,6 +150,23 @@ class TestNonFinite:
             assert rejected == ["ParamAngleX"], bad
 
 
+class TestReleaseFeedback:
+    def test_unknown_release_ids_are_reported(self):
+        from body import _Body, validate_command
+
+        b = _Body(body_id="x", manifest=MANIFEST, send=None)
+        clean, rejected = validate_command(b, {"release": ["ParamAngleX", "ParamNope"]})
+        assert clean["release"] == ["ParamAngleX"]
+        assert rejected == ["ParamNope"]
+
+    def test_hold_ms_zero_is_forwarded(self):
+        from body import _Body, validate_command
+
+        b = _Body(body_id="x", manifest=MANIFEST, send=None)
+        clean, _ = validate_command(b, {"params": {"ParamAngleX": 1}, "hold_ms": 0})
+        assert clean["hold_ms"] == 0
+
+
 class TestReplacedConnection:
     """A second connection for the same body_id closes the first (code 4409)."""
 

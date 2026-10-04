@@ -123,7 +123,12 @@ def validate_command(body: _Body, command: dict[str, Any]) -> tuple[dict[str, An
         clean[pid] = min(max(v, lo), hi)
     if clean:
         out["params"] = clean
-    release = [p for p in (command.get("release") or []) if p in ranges]
+    release = []
+    for p in command.get("release") or []:
+        if p in ranges:
+            release.append(p)
+        elif p not in rejected:
+            rejected.append(p)
     if release:
         out["release"] = release
     if command.get("hold_ms") is not None:
