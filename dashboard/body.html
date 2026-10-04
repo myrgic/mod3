@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mod³ · Live2D body</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; height: 100%; background: #0f1117; color: #cfd3dc; font: 13px/1.4 system-ui, sans-serif; overflow: hidden; }
+  #stage { position: fixed; inset: 0; }
+  #hud { position: fixed; left: 12px; top: 12px; background: rgba(20,22,30,.85); border: 1px solid #2a2f3d; border-radius: 8px; padding: 10px 12px; max-width: 360px; }
+  #hud h1 { font-size: 13px; margin: 0 0 6px; color: #8ab4f8; }
+  #hud code { color: #e6c07b; }
+  #states { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+  button { background: #2a2f3d; color: #cfd3dc; border: 1px solid #3a4152; border-radius: 4px; padding: 3px 7px; font-size: 11px; cursor: pointer; }
+  button.on { background: #3b5bdb; border-color: #4c6ef5; }
+  #status { margin-top: 6px; color: #8b93a7; }
+  #hud.hidden { display: none; }
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<div id="hud">
+  <h1>Live2D body · <code id="bid"></code></h1>
+  <div>Model: <code id="mname"></code></div>
+  <div>Lip sync session: <code id="sid">(none)</code></div>
+  <div id="states"></div>
+  <div style="margin-top:6px"><button id="audio">Enable audio</button> <button id="hide">Hide HUD (h)</button></div>
+  <div id="status">loading…</div>
+</div>
+
+<!-- Cubism Core is Live2D's proprietary runtime; it is loaded from Live2D's CDN, never vendored. -->
+<script src="https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pixi.js@6.5.10/dist/browser/pixi.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pixi-live2d-display@0.4.0/dist/cubism4.min.js"></script>
+<script type="module">
+  import { Live2DBody, STATES, connectBody, connectLipSync } from "./live2d-body.js";
+
+  // ?model=<model3.json url>&body=<id>&session=<mod3 session for lip sync>&seed=<n>&scale=<n>
+  const q = new URLSearchParams(location.search);
+  const MODEL = q.get("model") || "https://cdn.jsdelivr.net/gh/guansss/pixi-live2d-display/test/assets/haru/haru_greeter_t03.model3.json";
+  const BODY_ID = q.get("body") || "live2d";
+  const SESSION = q.get("session");
+  const status = (s) => (document.getElementById("status").textContent = s);
+  document.getElementById("bid").textContent = BODY_ID;
+  document.getElementById("mname").textContent = MODEL.split("/").pop();
+  if (SESSION) document.getElementById("sid").textContent = SESSION;
+
+  const app = new PIXI.Application({ view: document.getElementById("stage"), resizeTo: window, backgroundAlpha: 0, antialias: true });
+  const model = await PIXI.live2d.Live2DModel.from(MODEL, { autoInteract: false });
+  app.stage.addChild(model);
+  const fit = () => {
+    const s = Number(q.get("scale")) || Math.min(window.innerWidth / model.internalModel.width, window.innerHeight / model.internalModel.height) * 0.9;
+    model.scale.set(s);
+    model.anchor.set(0.5, 0.5);
+    model.position.set(window.innerWidth / 2, window.innerHeight / 2);
+  };
+  fit(); window.addEventListener("resize", fit);
+
+  const body = new Live2DBody(model, { seed: Number(q.get("seed")) || 1 });
+  window.body = body; // for poking at it from the console
+
+  const box = document.getElementById("states");
+  const buttons = STATES.map((st) => {
+    const b = document.createElement("button");
+    b.textContent = st;
+    b.onclick = () => body.act({ state: st });
+    box.appendChild(b);
+    return b;
+  });
+  setInterval(() => buttons.forEach((b) => b.classList.toggle("on", b.textContent === body.state)), 200);
+
+  connectBody(body, { bodyId: BODY_ID, onStatus: status });
+  let lip = SESSION ? connectLipSync(body, { sessionId: SESSION }) : null;
+  document.getElementById("audio").onclick = () => lip?.resume();
+  const hud = document.getElementById("hud");
+  document.getElementById("hide").onclick = () => hud.classList.add("hidden");
+  window.addEventListener("keydown", (e) => { if (e.key === "h") hud.classList.toggle("hidden"); });
+</script>
+</body>
+</html>

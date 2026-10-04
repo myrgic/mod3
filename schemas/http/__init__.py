@@ -15,6 +15,7 @@ All models use ``model_config = ConfigDict(populate_by_name=True, extra="allow")
 for forward-compatibility with fields added by future kernel versions.
 """
 
+from .bodies import BodyActRequest
 from .bus import BusActRequest, BusActResponse, BusPerceiveResponse
 from .compositions import (
     CompositionCreateRequest,

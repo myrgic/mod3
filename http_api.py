@@ -67,6 +67,7 @@ from modality import EncodedOutput, ModalityType
 from modules.text import TextModule
 from modules.voice import VoiceModule
 from schemas.http import (
+    BodyActRequest,
     BusActRequest,
     ComposeProfileRequest,
     CompositionCreateRequest,
@@ -3590,6 +3591,77 @@ async def ws_dashboard_chat(websocket: WebSocket):
             pass
         _dashboard_chat_unregister(q)
         _logger.info("dashboard-chat subscriber disconnected")
+
+
+# ---------------------------------------------------------------------------
+# Bodies — agent-driven animated avatars (see body.py for the wire protocol)
+# ---------------------------------------------------------------------------
+
+
+@app.websocket("/ws/body/{body_id}")
+async def ws_body(websocket: WebSocket, body_id: str):
+    """A body (e.g. dashboard/body.html with a Live2D model) attaches here.
+
+    The first frame must be ``{"type": "hello", "manifest": {...}}``. After
+    that the body receives ``act`` frames and answers each with a ``receipt``.
+    """
+    from body import get_default_body_registry
+
+    await websocket.accept()
+    try:
+        first = await asyncio.wait_for(websocket.receive_json(), timeout=10.0)
+    except Exception:  # noqa: BLE001 — no hello, no body
+        await websocket.close(code=4400)
+        return
+    if not isinstance(first, dict) or first.get("type") != "hello" or not isinstance(first.get("manifest"), dict):
+        await websocket.close(code=4400)
+        return
+
+    async def _send(msg: dict) -> None:
+        await websocket.send_json(msg)
+
+    registry = get_default_body_registry()
+    body = registry.register(body_id, first["manifest"], _send, asyncio.get_running_loop())
+    await websocket.send_json({"type": "welcome", "body_id": body_id})
+    try:
+        while True:
+            msg = await websocket.receive_json()
+            if isinstance(msg, dict) and msg.get("type") == "receipt":
+                registry.on_receipt(body, msg)
+    except Exception as exc:  # noqa: BLE001 — disconnect is the normal exit
+        _logger.debug("/ws/body/%s closed: %s", body_id, exc)
+    finally:
+        registry.unregister(body)
+
+
+@app.get("/v1/bodies")
+def bodies_list():
+    """Connected bodies with their manifests and last receipt."""
+    from body import get_default_body_registry
+
+    return {"bodies": get_default_body_registry().list()}
+
+
+@app.get("/v1/bodies/{body_id}")
+def bodies_get(body_id: str):
+    from body import get_default_body_registry
+
+    body = get_default_body_registry().get(body_id)
+    if body is None:
+        return JSONResponse(status_code=404, content={"error": f"no body '{body_id}' is connected"})
+    return body.describe()
+
+
+@app.post("/v1/bodies/{body_id}/act")
+async def bodies_act(body_id: str, req: BodyActRequest):
+    """Move a body; returns the body's receipt of the state it actually reached."""
+    from body import BodyError, get_default_body_registry
+
+    command = req.model_dump(exclude={"timeout_sec"}, exclude_none=True)
+    try:
+        return await get_default_body_registry().act(body_id, command, timeout=req.timeout_sec)
+    except BodyError as exc:
+        return JSONResponse(status_code=exc.status, content={"error": str(exc)})
 
 
 # Mount dashboard static files (after explicit routes so they don't shadow /v1/*)
