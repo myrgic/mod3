@@ -72,7 +72,6 @@ def _start(client, body_id, **kw):
     return stop, seen, t
 
 
-
 class TestValidation:
     def test_clamps_and_rejects(self):
         from body import _Body, validate_command
@@ -102,7 +101,9 @@ class TestBodyChannel:
         assert [b["body_id"] for b in listed] == ["storm"]
         assert listed[0]["states"] == ["IDLE", "DANCING"]
 
-        r = client.post("/v1/bodies/storm/act", json={"state": "DANCING", "params": {"ParamAngleX": 50, "ParamBogus": 1}})
+        r = client.post(
+            "/v1/bodies/storm/act", json={"state": "DANCING", "params": {"ParamAngleX": 50, "ParamBogus": 1}}
+        )
         assert r.status_code == 200, r.text
         out = r.json()
         assert out["command"] == {"state": "DANCING", "params": {"ParamAngleX": 30.0}}

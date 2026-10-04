@@ -45,6 +45,7 @@ from .voice_profiles import (
 from .voices import EngineInfo, VoicesResponse
 
 __all__ = [
+    "BodyActRequest",
     # synthesize
     "SpeakRequest",
     "SpeechRequest",
