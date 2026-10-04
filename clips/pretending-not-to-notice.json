@@ -1,0 +1,27 @@
+{
+  "name": "pretending-not-to-notice",
+  "description": "look away, sneak quick glances back to centre",
+  "credit": "adapted from Vroku's controller suite (state of the same name)",
+  "loop": true,
+  "fade_ms": 300,
+  "tracks": {
+    "head.x": {
+      "jitter": {
+        "pick": [
+          -1,
+          1
+        ],
+        "every_ms": [
+          2150,
+          5400
+        ],
+        "hold_ms": [
+          150,
+          400
+        ],
+        "rest": 0
+      },
+      "smooth": 0.075
+    }
+  }
+}

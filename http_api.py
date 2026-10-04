@@ -68,6 +68,8 @@ from modules.text import TextModule
 from modules.voice import VoiceModule
 from schemas.http import (
     BodyActRequest,
+    BodyPlayRequest,
+    BodyStopRequest,
     BusActRequest,
     ComposeProfileRequest,
     CompositionCreateRequest,
@@ -3662,6 +3664,40 @@ async def bodies_act(body_id: str, req: BodyActRequest):
         return await get_default_body_registry().act(body_id, command, timeout=req.timeout_sec)
     except BodyError as exc:
         return JSONResponse(status_code=exc.status, content={"error": str(exc)})
+
+
+@app.post("/v1/bodies/{body_id}/play")
+async def bodies_play(body_id: str, req: BodyPlayRequest):
+    """Play an agent-authored clip (data, checked against the body's manifest)."""
+    from body import BodyError, get_default_body_registry
+
+    try:
+        return await get_default_body_registry().play(body_id, req.clip, req.args, timeout=req.timeout_sec)
+    except BodyError as exc:
+        return JSONResponse(status_code=exc.status, content={"error": str(exc)})
+
+
+@app.post("/v1/bodies/{body_id}/stop")
+async def bodies_stop(body_id: str, req: BodyStopRequest):
+    """Stop a running clip by name, or every clip if none is named."""
+    from body import BodyError, get_default_body_registry
+
+    try:
+        return await get_default_body_registry().stop(body_id, req.clip, timeout=req.timeout_sec)
+    except BodyError as exc:
+        return JSONResponse(status_code=exc.status, content={"error": str(exc)})
+
+
+@app.post("/v1/clips/check")
+def clips_check(req: BodyPlayRequest):
+    """Validate and compile a clip without a body (body-independent checks only)."""
+    from clip import ClipError, compile_clip
+
+    try:
+        compiled, rejected = compile_clip(req.clip, args=req.args)
+    except ClipError as exc:
+        return JSONResponse(status_code=400, content={"error": str(exc)})
+    return {"compiled": compiled, "rejected": rejected}
 
 
 # Mount dashboard static files (after explicit routes so they don't shadow /v1/*)

@@ -1,0 +1,71 @@
+{
+  "name": "idle-glance",
+  "description": "the idle look-around as a clip: wander, return, eyes flick",
+  "credit": "adapted from Vroku's controller suite (state of the same name)",
+  "loop": true,
+  "fade_ms": 400,
+  "tracks": {
+    "head.x": {
+      "jitter": {
+        "min": -1,
+        "max": 1,
+        "every_ms": [
+          2900,
+          6000
+        ],
+        "hold_ms": [
+          400,
+          1000
+        ],
+        "rest": 0
+      },
+      "smooth": 0.075
+    },
+    "head.y": {
+      "jitter": {
+        "min": -0.47,
+        "max": 0.47,
+        "every_ms": [
+          2900,
+          6000
+        ],
+        "hold_ms": [
+          400,
+          1000
+        ],
+        "rest": 0
+      },
+      "smooth": 0.075
+    },
+    "eyes.x": {
+      "jitter": {
+        "min": -0.2,
+        "max": 0.2,
+        "every_ms": [
+          150,
+          750
+        ]
+      },
+      "follow": {
+        "of": "head.x",
+        "gain": 0.1
+      },
+      "smooth": 0.14
+    },
+    "eyes.y": {
+      "jitter": {
+        "min": -0.2,
+        "max": 0.2,
+        "every_ms": [
+          150,
+          750
+        ]
+      },
+      "follow": {
+        "of": "head.y",
+        "gain": 0.1
+      },
+      "smooth": 0.14
+    }
+  }
+}
