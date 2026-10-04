@@ -31,6 +31,7 @@ import asyncio
 import concurrent.futures
 import logging
 import math
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -137,10 +138,18 @@ def validate_command(body: _Body, command: dict[str, Any]) -> tuple[dict[str, An
 
 
 class BodyRegistry:
-    """body_id → connected body. Lives on the server's event loop."""
+    """body_id → connected body.
+
+    Touched from two kinds of thread: the event loop (ws_body registers and
+    unregisters; async routes act) and Starlette's thread pool (the sync GET
+    routes call list()/get()). Every access to ``_bodies`` and to a body's
+    ``pending`` map goes through ``_lock``; iteration works on snapshots taken
+    under it. Futures are completed outside the lock.
+    """
 
     def __init__(self) -> None:
         self._bodies: dict[str, _Body] = {}
+        self._lock = threading.Lock()
 
     def register(
         self,
@@ -150,18 +159,22 @@ class BodyRegistry:
         loop: asyncio.AbstractEventLoop | None = None,
         close: Any = None,
     ) -> _Body:
-        old = self._bodies.get(body_id)
+        body = _Body(body_id=body_id, manifest=manifest, send=send, loop=loop, close=close)
+        with self._lock:
+            old = self._bodies.get(body_id)
+            self._bodies[body_id] = body
+            waiters = list(old.pending.values()) if old is not None else []
+            if old is not None:
+                old.pending.clear()
         if old is not None:
             # A newer connection takes over this body_id: fail the old one's
             # waiters and close its socket (code 4409), so its server task ends
             # instead of idling forever. Clients must not auto-reconnect on 4409,
             # or two pages with the same id would evict each other in a loop.
-            for fut in old.pending.values():
+            for fut in waiters:
                 if not fut.done():
                     fut.set_exception(BodyError(409, "body reconnected"))
             self._close(old)
-        body = _Body(body_id=body_id, manifest=manifest, send=send, loop=loop, close=close)
-        self._bodies[body_id] = body
         logger.info("body attached: %s kind=%s params=%d", body_id, manifest.get("kind"), len(body.param_ranges))
         return body
 
@@ -184,34 +197,42 @@ class BodyRegistry:
             logger.debug("closing replaced body %s failed", body.body_id, exc_info=True)
 
     def unregister(self, body: _Body) -> None:
-        if self._bodies.get(body.body_id) is body:
-            del self._bodies[body.body_id]
-        for fut in body.pending.values():
+        with self._lock:
+            if self._bodies.get(body.body_id) is body:
+                del self._bodies[body.body_id]
+            waiters = list(body.pending.values())
+            body.pending.clear()
+        for fut in waiters:
             if not fut.done():
                 fut.set_exception(BodyError(410, "body disconnected"))
         logger.info("body detached: %s", body.body_id)
 
     def get(self, body_id: str) -> _Body | None:
-        return self._bodies.get(body_id)
+        with self._lock:
+            return self._bodies.get(body_id)
 
     def list(self) -> list[dict[str, Any]]:
-        return [b.describe() for b in self._bodies.values()]
+        with self._lock:
+            bodies = list(self._bodies.values())
+        return [b.describe() for b in bodies]
 
     def on_receipt(self, body: _Body, msg: dict[str, Any]) -> None:
         receipt = {k: v for k, v in msg.items() if k != "type"}
         body.last_receipt = receipt
-        fut = body.pending.pop(str(msg.get("id")), None)
+        with self._lock:
+            fut = body.pending.pop(str(msg.get("id")), None)
         if fut is not None and not fut.done():
             fut.set_result(receipt)
 
     async def act(self, body_id: str, command: dict[str, Any], timeout: float = 2.0) -> dict[str, Any]:
-        body = self._bodies.get(body_id)
+        body = self.get(body_id)
         if body is None:
             raise BodyError(404, f"no body '{body_id}' is connected")
         clean, rejected = validate_command(body, command)
         cid = str(uuid.uuid4())
         fut: concurrent.futures.Future = concurrent.futures.Future()
-        body.pending[cid] = fut
+        with self._lock:
+            body.pending[cid] = fut
         t0 = time.perf_counter()
         frame = {"type": "act", "id": cid, **clean}
         try:
@@ -224,7 +245,8 @@ class BodyRegistry:
         except asyncio.TimeoutError as exc:
             raise BodyError(504, f"body '{body_id}' sent no receipt within {timeout}s") from exc
         finally:
-            body.pending.pop(cid, None)
+            with self._lock:
+                body.pending.pop(cid, None)
         return {
             "body_id": body_id,
             "command": clean,

@@ -187,3 +187,42 @@ class TestReplacedConnection:
                 assert exc.value.code == 4409
                 new = get_default_body_registry().get("dup")
                 assert new is not None and new is not old
+
+
+class TestRegistryThreadSafety:
+    """list() runs on the thread pool while the event loop registers/unregisters."""
+
+    def test_list_while_registering_from_another_thread(self):
+        import sys as _sys
+
+        from body import BodyRegistry
+
+        reg = BodyRegistry()
+        old = _sys.getswitchinterval()
+        _sys.setswitchinterval(1e-6)  # force frequent thread switches
+        errors: list[BaseException] = []
+        stop = threading.Event()
+
+        def churn():
+            i = 0
+            while not stop.is_set():
+                b = reg.register(f"b{i % 64}", MANIFEST, send=None)
+                if i % 3 == 0:
+                    reg.unregister(b)
+                i += 1
+
+        t = threading.Thread(target=churn, daemon=True)
+        t.start()
+        try:
+            deadline = time.time() + 1.5
+            while time.time() < deadline:
+                try:
+                    reg.list()
+                except RuntimeError as exc:  # "dictionary changed size during iteration"
+                    errors.append(exc)
+                    break
+        finally:
+            stop.set()
+            t.join(2)
+            _sys.setswitchinterval(old)
+        assert not errors, errors
