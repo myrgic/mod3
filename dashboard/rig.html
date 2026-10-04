@@ -1,0 +1,57 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>mod3 rig</title>
+<style>
+  body{margin:0;background:#111214;color:#d6d7da;font:12px/1.4 ui-monospace,Menlo,monospace;display:grid;
+       grid-template-columns:420px 1fr;grid-template-rows:auto 1fr 220px;height:100vh;gap:6px;padding:6px;box-sizing:border-box}
+  .p{background:#1b1c1f;border:1px solid #2a2b30;border-radius:6px;padding:8px;overflow:auto;min-height:0}
+  h3{margin:0 0 6px;font-size:11px;color:#8a8f98;text-transform:uppercase;letter-spacing:.05em}
+  #top{grid-column:1/3;display:flex;gap:14px;align-items:center}
+  .ok{color:#3fb27f}.bad{color:#e06c75}
+  pre{margin:0;white-space:pre-wrap;word-break:break-all}
+  iframe{width:100%;height:100%;border:0;border-radius:4px;background:#000}
+  button{background:#2a2b30;color:#d6d7da;border:1px solid #3a3b40;border-radius:4px;padding:3px 7px;margin:2px;cursor:pointer;font:inherit}
+  button:hover{background:#3a3b40}
+  #log{grid-column:1/3}
+</style></head><body>
+<div id="top" class="p"><b>mod3 rig</b><span id="health">…</span><span id="mods"></span>
+  <span style="margin-left:auto">server <input id="base" size="22"></span></div>
+<div class="p" id="left">
+  <h3>body</h3><div id="states"></div>
+  <div><button onclick="act({params:{ParamAngleX:-30}})">look L</button><button onclick="act({params:{ParamAngleX:30}})">look R</button>
+  <button onclick="act({params:{ParamMouthOpenY:1}})">mouth</button><button onclick="act({params:{ParamEyeLOpen:0}})">wink</button>
+  <button onclick="act({release:['ParamAngleX','ParamMouthOpenY','ParamEyeLOpen']})">release</button></div>
+  <h3 style="margin-top:10px">probes</h3>
+  <button onclick="say()">speak "testing"</button><button onclick="wsprobe('/ws/audio/main')">ws /audio</button>
+  <button onclick="wsprobe('/ws/chat')">ws /chat</button>
+  <h3 style="margin-top:10px">sessions</h3><pre id="sessions"></pre>
+  <h3 style="margin-top:10px">hud</h3><pre id="hud"></pre>
+</div>
+<div class="p" style="padding:0"><iframe id="stage"></iframe></div>
+<div class="p" id="log"><h3>log</h3><pre id="out"></pre></div>
+<script>
+const q=new URLSearchParams(location.search), base=document.getElementById('base');
+base.value=q.get('server')||location.origin;
+const B=()=>base.value.replace(/\/$/,''), BODY=q.get('body')||'storm';
+document.getElementById('stage').src=`${B()}/dashboard/body.html?body=${BODY}&seed=7`;
+const out=document.getElementById('out');
+function log(...a){out.textContent=`${new Date().toLocaleTimeString()} ${a.map(x=>typeof x=='string'?x:JSON.stringify(x)).join(' ')}\n`+out.textContent.slice(0,20000)}
+async function j(path,opt){const r=await fetch(B()+path,opt);const t=await r.text();let b;try{b=JSON.parse(t)}catch{b=t};return{s:r.status,b}}
+async function act(cmd){const t=performance.now();const r=await j(`/v1/bodies/${BODY}/act`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cmd)});
+  const rc=r.b.receipt||{};log(`act ${r.s}`,cmd,'→',{state:rc.state,params:rc.params,rejected:r.b.rejected,ms:Math.round(performance.now()-t)})}
+async function say(){const r=await fetch(B()+'/v1/synthesize',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:'testing',skip_playback:true})});
+  if(!r.ok){log('synthesize',r.status,await r.text());return}const blob=await r.blob();log('synthesize',r.status,blob.size+' bytes');new Audio(URL.createObjectURL(blob)).play()}
+function wsprobe(p){const u=B().replace(/^http/,'ws')+p,w=new WebSocket(u),t=performance.now();
+  w.onopen=()=>{log('ws OPEN',p,Math.round(performance.now()-t)+'ms');w.close()};w.onerror=()=>log('ws FAIL',p)}
+async function poll(){
+  try{const h=await j('/health');const el=document.getElementById('health');
+    el.innerHTML=h.s==200?`<span class=ok>● up</span> v${h.b.version||'?'} ${Math.round((h.b.uptime_sec||0)/60)}m`:`<span class=bad>● ${h.s}</span>`;
+    document.getElementById('mods').textContent=Object.entries(h.b.modalities||{}).map(([k,v])=>`${k}:${v?'✓':'✗'}`).join(' ')+'  '+
+      Object.entries(h.b.engines||{}).filter(([,v])=>v=='loaded').map(([k])=>k).join(',')}
+  catch(e){document.getElementById('health').innerHTML='<span class=bad>● unreachable</span>'}
+  try{const s=await j('/v1/sessions');document.getElementById('sessions').textContent=(s.b.sessions||[]).map(x=>`${x.session_id}  ${x.state}  ${x.assigned_voice}  q=${x.queue_depth}`).join('\n')||'(none)'}catch{}
+  try{const h=await j('/v1/bus/hud');document.getElementById('hud').textContent=JSON.stringify(h.b,null,1).slice(0,3000)}catch{}
+  try{const b=await j(`/v1/bodies/${BODY}`);const st=document.getElementById('states');
+    if(b.s==200&&!st.dataset.done&&b.b.states){st.dataset.done=1;st.innerHTML=b.b.states.map(s=>`<button onclick="act({state:'${s}'})">${s}</button>`).join('')}}catch{}
+}
+poll();setInterval(poll,2000);log('rig up, server',B());
+</script></body></html>

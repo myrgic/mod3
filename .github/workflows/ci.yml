@@ -41,7 +41,7 @@ jobs:
       # "ModuleNotFoundError: No module named 'mcp.server.fastmcp'".
       - run: |
           pip install \
-            fastapi uvicorn httpx pysbd numpy scipy pydantic \
+            fastapi uvicorn websockets httpx pysbd numpy scipy pydantic \
             pytest pytest-asyncio python-multipart \
             "mcp>=1.20.0,<2.0.0" mistral-common soundfile
       - name: Run tests
@@ -59,7 +59,7 @@ jobs:
           python-version: "3.12"
       - run: |
           pip install \
-            fastapi uvicorn httpx pysbd numpy scipy pydantic \
+            fastapi uvicorn websockets httpx pysbd numpy scipy pydantic \
             python-multipart "mcp>=1.20.0,<2.0.0" mistral-common soundfile
       - name: Test API endpoints resolve
         run: |

@@ -37,4 +37,6 @@ espeakng-loader>=0.2.0
 setuptools
 fastapi>=0.115.0
 uvicorn>=0.30.0
+# WebSocket transport for /ws/* (audio, chat, acp, body). Without it uvicorn 404s every upgrade silently.
+websockets>=12
 httpx>=0.24.0
