@@ -3,8 +3,9 @@ name: CI
 on:
   push:
     branches: [main]
+  # Every PR, not only PRs into main: stacked PRs (base = another feature
+  # branch) otherwise run no CI at all until they are retargeted.
   pull_request:
-    branches: [main]
 
 jobs:
   lint:

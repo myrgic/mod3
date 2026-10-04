@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+### Added — CI: cog-review gate (ported from myrgic/cogos)
+
+- **Every same-repo PR now gets an independent AI review.** `.github/workflows/pr-review.yml` runs the `cog-review` agent (read-only tools, canary-proven sandbox) against `.github/pr-review-rubric.md` and posts one GitHub review pinned to the head commit plus one `cog-review` check-run. Fail closed: only an explicit `approve` passes; request-changes, comment, reviewer error, and missing credentials all block. Helpers: `scripts/ci/standing-verdict.sh` (an infra error never demotes a real verdict on the same head) and `scripts/pr-await-review.sh` (the operator-side consumer: exit 0 only on check success plus a genuine bot APPROVED review at the current head).
+- **CI and PR checks now run on every PR, not only PRs into `main`,** so stacked PRs are tested before they're retargeted. The changelog check diffs against the PR's actual base.
+
 ## [0.8.0] - 2026-08-02
 
 ### Fixed — CI: unpinned `mcp` install broke test collection
