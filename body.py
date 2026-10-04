@@ -52,6 +52,9 @@ class _Body:
     manifest: dict[str, Any]
     send: Any  # async callable(dict) -> None, bound to ``loop``
     loop: asyncio.AbstractEventLoop | None = None
+    # async callable() -> None that closes this body's connection; used when a
+    # newer connection takes over the same body_id.
+    close: Any = None
     connected_at: float = field(default_factory=time.time)
     # concurrent futures, so a receipt arriving on the socket's loop can wake
     # an HTTP request waiting on a different loop (or thread).
@@ -128,18 +131,43 @@ class BodyRegistry:
         self._bodies: dict[str, _Body] = {}
 
     def register(
-        self, body_id: str, manifest: dict[str, Any], send: Any, loop: asyncio.AbstractEventLoop | None = None
+        self,
+        body_id: str,
+        manifest: dict[str, Any],
+        send: Any,
+        loop: asyncio.AbstractEventLoop | None = None,
+        close: Any = None,
     ) -> _Body:
         old = self._bodies.get(body_id)
         if old is not None:
-            # A reload replaces the old connection; fail its waiters cleanly.
+            # A newer connection takes over this body_id: fail the old one's
+            # waiters and close its socket (code 4409), so its server task ends
+            # instead of idling forever. Clients must not auto-reconnect on 4409,
+            # or two pages with the same id would evict each other in a loop.
             for fut in old.pending.values():
                 if not fut.done():
                     fut.set_exception(BodyError(409, "body reconnected"))
-        body = _Body(body_id=body_id, manifest=manifest, send=send, loop=loop)
+            self._close(old)
+        body = _Body(body_id=body_id, manifest=manifest, send=send, loop=loop, close=close)
         self._bodies[body_id] = body
         logger.info("body attached: %s kind=%s params=%d", body_id, manifest.get("kind"), len(body.param_ranges))
         return body
+
+    @staticmethod
+    def _close(body: _Body) -> None:
+        if body.close is None:
+            return
+        try:
+            here = asyncio.get_running_loop()
+        except RuntimeError:
+            here = None
+        try:
+            if body.loop is not None and body.loop is not here:
+                asyncio.run_coroutine_threadsafe(body.close(), body.loop)
+            elif here is not None:
+                here.create_task(body.close())
+        except Exception:  # noqa: BLE001 — a dead socket is already closed
+            logger.debug("closing replaced body %s failed", body.body_id, exc_info=True)
 
     def unregister(self, body: _Body) -> None:
         if self._bodies.get(body.body_id) is body:

@@ -137,3 +137,25 @@ class TestBodyChannel:
             with pytest.raises(WebSocketDisconnect) as e:
                 ws.receive_json()
             assert e.value.code == 4400
+
+
+class TestReplacedConnection:
+    """A second connection for the same body_id closes the first (code 4409)."""
+
+    def test_old_socket_is_closed_with_4409(self, client):
+        from starlette.websockets import WebSocketDisconnect
+
+        from body import get_default_body_registry
+
+        with client.websocket_connect("/ws/body/dup") as first:
+            first.send_json({"type": "hello", "manifest": MANIFEST})
+            assert first.receive_json()["type"] == "welcome"
+            old = get_default_body_registry().get("dup")
+            with client.websocket_connect("/ws/body/dup") as second:
+                second.send_json({"type": "hello", "manifest": MANIFEST})
+                assert second.receive_json()["type"] == "welcome"
+                with pytest.raises(WebSocketDisconnect) as exc:
+                    first.receive_json()
+                assert exc.value.code == 4409
+                new = get_default_body_registry().get("dup")
+                assert new is not None and new is not old
