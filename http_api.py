@@ -3622,8 +3622,11 @@ async def ws_body(websocket: WebSocket, body_id: str):
     async def _send(msg: dict) -> None:
         await websocket.send_json(msg)
 
+    async def _close() -> None:
+        await websocket.close(code=4409, reason="replaced by a newer connection for this body id")
+
     registry = get_default_body_registry()
-    body = registry.register(body_id, first["manifest"], _send, asyncio.get_running_loop())
+    body = registry.register(body_id, first["manifest"], _send, asyncio.get_running_loop(), _close)
     await websocket.send_json({"type": "welcome", "body_id": body_id})
     try:
         while True:

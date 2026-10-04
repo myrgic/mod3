@@ -398,7 +398,13 @@ export function connectBody(body, { bodyId, origin = location.origin, onStatus =
         onStatus(`${msg.type} → ${msg.type === "act" ? receipt.state : (receipt.playing || receipt.stopped || []).toString()}`);
       }
     };
-    ws.onclose = () => { onStatus("disconnected"); if (!closed) setTimeout(open, 1500); };
+    ws.onclose = (ev) => {
+      // 4409: another page took over this body id. Don't reconnect, or two
+      // pages with the same id would keep evicting each other.
+      if (ev.code === 4409) { onStatus("replaced by another page (4409); not reconnecting"); return; }
+      onStatus("disconnected");
+      if (!closed) setTimeout(open, 1500);
+    };
   };
   open();
   return () => { closed = true; ws?.close(); };
