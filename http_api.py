@@ -3627,11 +3627,15 @@ async def ws_body(websocket: WebSocket, body_id: str):
             await websocket.send_json(msg)
 
     async def _close() -> None:
-        await websocket.close(code=4409, reason="replaced by a newer connection for this body id")
+        # Same lock: never close mid-frame on a socket another task is writing.
+        async with send_lock:
+            await websocket.close(code=4409, reason="replaced by a newer connection for this body id")
 
     registry = get_default_body_registry()
     body = registry.register(body_id, first["manifest"], _send, asyncio.get_running_loop(), _close)
-    await websocket.send_json({"type": "welcome", "body_id": body_id})
+    # Registered bodies are reachable by /act at once, so even the welcome
+    # frame goes through the lock: every write on this socket is serialized.
+    await _send({"type": "welcome", "body_id": body_id})
     try:
         while True:
             msg = await websocket.receive_json()
