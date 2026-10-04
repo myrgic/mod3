@@ -1,0 +1,68 @@
+{
+  "name": "excited",
+  "description": "quick darting looks, fast bounce, full smile",
+  "credit": "adapted from Vroku's controller suite (state of the same name)",
+  "args": {
+    "intensity": {
+      "default": 1,
+      "min": 0,
+      "max": 1.5
+    }
+  },
+  "loop": true,
+  "fade_ms": 200,
+  "tracks": {
+    "head.x": {
+      "jitter": {
+        "min": "-0.5*intensity",
+        "max": "0.5*intensity",
+        "every_ms": [
+          100,
+          300
+        ]
+      },
+      "smooth": 0.075
+    },
+    "head.y": {
+      "jitter": {
+        "min": "-0.33*intensity",
+        "max": "0.33*intensity",
+        "every_ms": [
+          100,
+          300
+        ]
+      },
+      "smooth": 0.075
+    },
+    "body.y": {
+      "wave": {
+        "shape": "abs",
+        "amp": "0.5*intensity",
+        "period_ms": 1257
+      }
+    },
+    "eyes.x": {
+      "jitter": {
+        "min": -0.2,
+        "max": 0.2,
+        "every_ms": [
+          150,
+          750
+        ]
+      },
+      "follow": {
+        "of": "head.x",
+        "gain": 0.1
+      },
+      "smooth": 0.14
+    },
+    "mouth.smile": {
+      "const": 1,
+      "smooth": 0.06
+    },
+    "eyes.smile": {
+      "const": 1,
+      "smooth": 0.06
+    }
+  }
+}

@@ -17,6 +17,11 @@ Wire protocol (JSON text frames):
                   "hold_ms": 1500}
   body → server  {"type": "receipt", "id": "<uuid>", "state": "...",
                   "params": {"ParamAngleX": 11.7, ...}}
+  server → body  {"type": "play", "id": "<uuid>", "clip": {<compiled clip>}}
+  server → body  {"type": "stop", "id": "<uuid>", "clip": "<name>"?}
+
+Clips (see clip.py) are agent-authored animations: data only, compiled and
+checked here against the body's manifest, so the body never runs agent code.
 
 The server validates commands against the manifest before forwarding: unknown
 states are refused, unknown parameters are dropped and listed in
@@ -73,6 +78,12 @@ class _Body:
             except (KeyError, TypeError, ValueError):
                 continue
         return out
+
+    @property
+    def channels(self) -> dict[str, Any]:
+        """Semantic channels this body maps (see clip.CHANNELS)."""
+        ch = self.manifest.get("channels") or {}
+        return ch if isinstance(ch, dict) else {}
 
     @property
     def states(self) -> list[str]:
@@ -229,12 +240,45 @@ class BodyRegistry:
         if body is None:
             raise BodyError(404, f"no body '{body_id}' is connected")
         clean, rejected = validate_command(body, command)
+        return await self._send_and_wait(body, "act", clean, rejected, timeout)
+
+    async def play(
+        self, body_id: str, clip: dict[str, Any], args: dict[str, Any] | None = None, timeout: float = 2.0
+    ) -> dict[str, Any]:
+        """Compile a clip for this body and start it. Receipt = first frames reached."""
+        from clip import ClipError, compile_clip
+
+        body = self.get(body_id)
+        if body is None:
+            raise BodyError(404, f"no body '{body_id}' is connected")
+        try:
+            compiled, rejected = compile_clip(
+                clip,
+                body_channels=body.channels,
+                body_params=body.param_ranges,
+                body_states=body.states,
+                args=args,
+            )
+        except ClipError as exc:
+            raise BodyError(400, str(exc)) from exc
+        return await self._send_and_wait(body, "play", {"clip": compiled}, rejected, timeout)
+
+    async def stop(self, body_id: str, clip: str | None = None, timeout: float = 2.0) -> dict[str, Any]:
+        body = self.get(body_id)
+        if body is None:
+            raise BodyError(404, f"no body '{body_id}' is connected")
+        return await self._send_and_wait(body, "stop", {"clip": clip} if clip else {}, [], timeout)
+
+    async def _send_and_wait(
+        self, body: _Body, kind: str, clean: dict[str, Any], rejected: list[str], timeout: float
+    ) -> dict[str, Any]:
+        body_id = body.body_id
         cid = str(uuid.uuid4())
         fut: concurrent.futures.Future = concurrent.futures.Future()
         with self._lock:
             body.pending[cid] = fut
         t0 = time.perf_counter()
-        frame = {"type": "act", "id": cid, **clean}
+        frame = {"type": kind, "id": cid, **clean}
         try:
             here = asyncio.get_running_loop()
             if body.loop is None or body.loop is here:

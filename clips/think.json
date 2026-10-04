@@ -1,0 +1,51 @@
+{
+  "name": "think",
+  "description": "look up and aside, eyes drifting, brows lifted",
+  "args": {
+    "side": {
+      "default": -1,
+      "min": -1,
+      "max": 1
+    }
+  },
+  "loop": true,
+  "fade_ms": 700,
+  "tracks": {
+    "head.x": {
+      "const": "0.35*side",
+      "wave": {
+        "amp": 0.05,
+        "period_ms": 7000
+      },
+      "smooth": 0.05
+    },
+    "head.y": {
+      "const": 0.3,
+      "smooth": 0.05
+    },
+    "eyes.x": {
+      "const": "0.6*side",
+      "jitter": {
+        "min": -0.15,
+        "max": 0.15,
+        "every_ms": [
+          600,
+          1600
+        ]
+      },
+      "smooth": 0.1
+    },
+    "eyes.y": {
+      "const": 0.6,
+      "smooth": 0.1
+    },
+    "brows.y": {
+      "const": 0.4,
+      "smooth": 0.05
+    },
+    "mouth.smile": {
+      "const": -0.1,
+      "smooth": 0.05
+    }
+  }
+}

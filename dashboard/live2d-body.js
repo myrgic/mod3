@@ -23,6 +23,8 @@
  * (after motions/physics inputs) instead of in a separate rAF loop.
  */
 
+import { ClipPlayer } from "./clip-player.js";
+
 // ------------------------------------------------------------------ helpers
 const clamp = (v, lo, hi) => Math.min(Math.max(Number.isFinite(v) ? v : 0, lo), hi);
 const lerp = (a, b, f) => a + (b - a) * clamp(f, 0, 1);
@@ -67,6 +69,20 @@ const CHANNEL_PARAM = {
   breath: "ParamBreath", mouthForm: "ParamMouthForm", mouthOpenY: "ParamMouthOpenY",
 };
 
+// Semantic channels for clips (see clip.py) → Cubism parameter ids.
+// "bi" = -1..1 around the default; "uni" = 0..1 across the range.
+const SEMANTIC = {
+  "head.x": ["bi", ["ParamAngleX"]], "head.y": ["bi", ["ParamAngleY"]], "head.z": ["bi", ["ParamAngleZ"]],
+  "body.x": ["bi", ["ParamBodyAngleX"]], "body.y": ["bi", ["ParamBodyAngleY"]], "body.z": ["bi", ["ParamBodyAngleZ"]],
+  "eyes.x": ["bi", ["ParamEyeBallX"]], "eyes.y": ["bi", ["ParamEyeBallY"]],
+  "eyes.open": ["uni", ["ParamEyeLOpen", "ParamEyeROpen"]],
+  "eye.l.open": ["uni", ["ParamEyeLOpen"]], "eye.r.open": ["uni", ["ParamEyeROpen"]],
+  "eyes.smile": ["uni", ["ParamEyeLSmile", "ParamEyeRSmile"]],
+  "mouth.open": ["uni", ["ParamMouthOpenY"]], "mouth.smile": ["bi", ["ParamMouthForm"]],
+  "brows.y": ["bi", ["ParamBrowLY", "ParamBrowRY"]], "brows.angle": ["bi", ["ParamBrowLAngle", "ParamBrowRAngle"]],
+  "cheek": ["uni", ["ParamCheek"]], "breath": ["uni", ["ParamBreath"]],
+};
+
 // ------------------------------------------------------------ core access
 export class CubismParams {
   constructor(model) {
@@ -85,6 +101,10 @@ export class CubismParams {
     const i = this.index.get(id);
     if (i === undefined) return;
     this.core._parameterValues[i] = clamp(v, this.min[i], this.max[i]);
+  }
+  range(id) {
+    const i = this.index.get(id);
+    return i === undefined ? null : { min: this.min[i], max: this.max[i], def: clamp(this.def[i], this.min[i], this.max[i]) };
   }
   manifestParams() {
     return this.ids.map((id, i) => ({ id, min: this.min[i], max: this.max[i], default: this.def[i] }))
@@ -107,6 +127,21 @@ export class Live2DBody {
     this.s = {};                // procedural state
     this._resetProcedural(performance.now());
 
+    // Clips: agent-authored animation, layered over the procedural state and
+    // under agent-held params.
+    this.channels = {};
+    for (const [ch, [polarity, ids]] of Object.entries(SEMANTIC)) {
+      const have = ids.filter((id) => this.params.has(id));
+      if (have.length) this.channels[ch] = { polarity, params: have };
+    }
+    this.clips = new ClipPlayer({
+      channels: this.channels,
+      get: (id) => this.params.get(id),
+      range: (id) => this.params.range(id),
+      rng: this.rng,
+      setState: (st) => { const prev = this.state; if (st && STATES.includes(st)) this.setState(st); return prev; },
+    });
+
     // pixi-live2d-display's Cubism4InternalModel.update() runs, per frame:
     //   motion → emit("afterMotionUpdate") → saveParameters() → expression,
     //   eyeBlink, focus, natural movements, physics, pose →
@@ -124,6 +159,7 @@ export class Live2DBody {
       const t = performance.now();
       const delta = Math.min(t - last, 100); last = t;
       if (this.idleRunning) this._tick(delta, t);
+      this.clips.tick(t, delta);
       this._apply();
     });
     internal.on("beforeModelUpdate", () => {
@@ -141,7 +177,8 @@ export class Live2DBody {
       runtime: "cubism4 / pixi-live2d-display",
       states: STATES,
       params: this.params.manifestParams(),
-      channels: Object.fromEntries(Object.entries(CHANNEL_PARAM).filter(([, p]) => this.params.has(p))),
+      channels: this.channels,
+      clip_generators: ["const", "keys", "wave", "jitter", "follow"],
       lip_sync: this.params.has("ParamMouthOpenY"),
       adapted_from: "Vroku's Live2D controller suite (Storm/Luna canvas)",
     };
@@ -168,7 +205,30 @@ export class Live2DBody {
     for (const id of touched) if (this.params.has(id)) params[id] = round(this.renderedValue(id));
     const channels = {};
     for (const [ch, id] of Object.entries(CHANNEL_PARAM)) if (this.params.has(id)) channels[ch] = round(this.renderedValue(id));
-    return { state: this.state, params, held: Object.fromEntries(this.held), channels, t: Date.now() };
+    const semantic = {};
+    for (const ch of Object.keys(this.channels)) semantic[ch] = round(this._channelRendered(ch));
+    return { state: this.state, params, held: Object.fromEntries(this.held), channels: semantic, raw: channels, clips: this.clips.list(), t: Date.now() };
+  }
+
+  _channelRendered(ch) {
+    const { polarity, params } = this.channels[ch];
+    const id = params[0], r = this.params.range(id), p = this.renderedValue(id);
+    if (polarity === "uni") return r.max === r.min ? 0 : (p - r.min) / (r.max - r.min);
+    if (p >= r.def) return r.max === r.def ? 0 : (p - r.def) / (r.max - r.def);
+    return r.def === r.min ? 0 : (p - r.def) / (r.def - r.min);
+  }
+
+  /** Start a compiled clip; receipt after it has had a few frames to move. */
+  async play(msg) {
+    this.clips.play(msg.clip);
+    await new Promise((r) => setTimeout(r, Math.min(250, (msg.clip.fade_ms || 0) + 50)));
+    return { ...this.receipt(), playing: msg.clip.name };
+  }
+
+  async stop(msg) {
+    const stopped = this.clips.stop(msg.clip);
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    return { ...this.receipt(), stopped };
   }
 
   setState(state) {
@@ -314,6 +374,7 @@ export class Live2DBody {
       if (this.held.has(id)) continue;
       if (this.s[ch] !== undefined) this.params.set(id, this.s[ch]);
     }
+    this.clips.apply((id, v) => { if (!this.held.has(id)) this.params.set(id, v); });
     for (const [id, v] of this.held) this.params.set(id, v);
   }
 }
@@ -331,10 +392,11 @@ export function connectBody(body, { bodyId, origin = location.origin, onStatus =
     ws.onmessage = async (ev) => {
       const msg = JSON.parse(ev.data);
       if (msg.type === "welcome") onStatus("connected");
-      if (msg.type === "act") {
-        const receipt = await body.act(msg);
+      const handler = { act: "act", play: "play", stop: "stop" }[msg.type];
+      if (handler) {
+        const receipt = await body[handler](msg);
         ws.send(JSON.stringify({ type: "receipt", id: msg.id, ...receipt }));
-        onStatus(`act → ${receipt.state}`);
+        onStatus(`${msg.type} → ${msg.type === "act" ? receipt.state : (receipt.playing || receipt.stopped || []).toString()}`);
       }
     };
     ws.onclose = (ev) => {

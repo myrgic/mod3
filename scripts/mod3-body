@@ -1,0 +1,266 @@
+#!/usr/bin/env python3
+"""mod3-body — drive a Mod³ body with your own animation library.
+
+Stdlib only, so any agent harness can call it. Clips are JSON files (see
+clip.py in mod3). Lookup order for a clip name:
+
+  1. your library   $MOD3_BODY_LIBRARY   (default: ./.cog/body/clips if it exists,
+                                           else ~/.mod3/body/clips)
+  2. shared library $MOD3_BODY_SHARED    (default: the clips/ dir next to this script)
+
+Commands
+  bodies                              connected bodies + their channels
+  list                                your clips and the shared ones (yours shadow shared)
+  show NAME                           print a clip
+  play NAME [k=v ...] [--body ID]     play a clip, args as k=v; prints the receipt
+  try FILE|JSON [k=v ...] [--body ID] play an unsaved clip (a path or inline JSON)
+  stop [NAME] [--body ID]             stop one clip, or all
+  check FILE|JSON|NAME                compile without a body; shows errors and resolved numbers
+  save FILE|JSON [--name N] [--force] check, then write into your library
+  fork NAME [--as NEW]                copy a shared clip into your library to edit
+  rm NAME                             remove from your library (shared clips are read-only)
+  act [--state S] [P=v ...] [--hold MS] [--release P,...]   raw act (named state / raw params)
+
+Env: MOD3_URL (default http://127.0.0.1:7860), MOD3_BODY (default body id: live2d)
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import sys
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+URL = os.environ.get("MOD3_URL", "http://127.0.0.1:7860").rstrip("/")
+BODY = os.environ.get("MOD3_BODY", "live2d")
+
+
+def library() -> Path:
+    env = os.environ.get("MOD3_BODY_LIBRARY")
+    if env:
+        return Path(env).expanduser()
+    local = Path.cwd() / ".cog" / "body" / "clips"
+    return local if local.parent.exists() else Path.home() / ".mod3" / "body" / "clips"
+
+
+def shared() -> Path:
+    env = os.environ.get("MOD3_BODY_SHARED")
+    if env:
+        return Path(env).expanduser()
+    for cand in (HERE / "clips", HERE.parent / "clips"):
+        if cand.is_dir():
+            return cand
+    return HERE / "clips"
+
+
+# Same rule as clip.NAME_RE on the server. A clip name becomes a filename, so
+# it must be a plain slug: no "/", no "..", no absolute path.
+NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+
+
+def safe_name(name: object) -> str:
+    if not isinstance(name, str) or not NAME_RE.match(name) or ".." in name:
+        die(f"invalid clip name {name!r}: lowercase slug [a-z0-9._-], up to 64 chars, no '..'")
+    return name  # type: ignore[return-value]
+
+
+def lib_path(d: Path, name: object) -> Path:
+    """<d>/<name>.json, refusing anything that would land outside d."""
+    p = (d / f"{safe_name(name)}.json").resolve()
+    if p.parent != d.resolve():
+        die(f"refusing path outside the library: {p}")
+    return p
+
+
+def die(msg: str, code: int = 1) -> None:
+    print(msg, file=sys.stderr)
+    sys.exit(code)
+
+
+def http(method: str, path: str, payload: dict | None = None) -> dict:
+    data = json.dumps(payload).encode() if payload is not None else None
+    req = urllib.request.Request(URL + path, data=data, method=method, headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=35) as r:
+            return json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        body = e.read().decode(errors="replace")
+        try:
+            body = json.loads(body).get("error", body)
+        except ValueError:
+            pass
+        die(f"{e.code}: {body}")
+    except urllib.error.URLError as e:
+        die(f"mod3 not reachable at {URL}: {e.reason}")
+    return {}
+
+
+def find(name: str) -> tuple[Path, str]:
+    for where, d in (("yours", library()), ("shared", shared())):
+        if not d.is_dir():
+            continue
+        p = lib_path(d, name)
+        if p.exists():
+            return p, where
+    die(f"no clip '{name}' in {library()} or {shared()}")
+    raise AssertionError
+
+
+def load(ref: str) -> dict:
+    """A path, inline JSON, or a library name."""
+    s = ref.strip()
+    if s.startswith("{"):
+        try:
+            return json.loads(s)
+        except ValueError as e:
+            die(f"inline JSON: {e}")
+    p = Path(ref).expanduser()
+    if p.suffix == ".json" or p.exists():
+        if not p.exists():
+            die(f"no such file: {p}")
+        return json.loads(p.read_text())
+    return json.loads(find(ref)[0].read_text())
+
+
+def kv(pairs: list[str]) -> dict:
+    out = {}
+    for p in pairs:
+        if "=" not in p:
+            die(f"expected k=v, got {p!r}")
+        k, v = p.split("=", 1)
+        try:
+            out[k] = float(v)
+        except ValueError:
+            out[k] = v
+    return out
+
+
+def summarize(res: dict) -> None:
+    rc = res.get("receipt", {})
+    out = {
+        "playing": rc.get("playing"),
+        "stopped": rc.get("stopped"),
+        "state": rc.get("state"),
+        "running": [c["name"] for c in rc.get("clips", [])],
+        "dropped": res.get("rejected") or [],
+        "channels": rc.get("channels"),
+        "round_trip_ms": res.get("round_trip_ms"),
+    }
+    print(json.dumps({k: v for k, v in out.items() if v not in (None, [])}, indent=2))
+
+
+def main(argv: list[str] | None = None) -> None:
+    ap = argparse.ArgumentParser(
+        prog="mod3-body", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ap.add_argument("cmd")
+    ap.add_argument("rest", nargs="*")
+    ap.add_argument("--body", default=BODY)
+    ap.add_argument("--name")
+    ap.add_argument("--as", dest="as_")
+    ap.add_argument("--force", action="store_true")
+    ap.add_argument("--state")
+    ap.add_argument("--hold", type=int)
+    ap.add_argument("--release", default="")
+    ap.add_argument("--json", action="store_true", help="print the full response")
+    a = ap.parse_intermixed_args(argv)
+    b = a.body
+
+    if a.cmd == "bodies":
+        for body in http("GET", "/v1/bodies").get("bodies", []):
+            chans = ", ".join(body.get("meta", {}).get("channels", {}) or [])
+            print(
+                f"{body['body_id']}  kind={body['kind']}  states={','.join(body['states'])}\n  channels: {chans or '(none declared)'}"
+            )
+        return
+    if a.cmd == "list":
+        mine = {p.stem for p in library().glob("*.json")}
+        for label, d in (("yours", library()), ("shared", shared())):
+            print(f"# {label}: {d}")
+            for p in sorted(d.glob("*.json")):
+                if label == "shared" and p.stem in mine:
+                    continue
+                try:
+                    c = json.loads(p.read_text())
+                except ValueError:
+                    print(f"  {p.stem:28} (unreadable JSON)")
+                    continue
+                args = " ".join(
+                    f"{k}={(v.get('default') if isinstance(v, dict) else v)}" for k, v in (c.get("args") or {}).items()
+                )
+                kind = "loop" if c.get("loop") else "once"
+                print(f"  {p.stem:28} {kind:4}  {args:24} {c.get('description', '')}")
+        return
+    if a.cmd == "show":
+        p, where = find(a.rest[0])
+        print(f"# {where}: {p}")
+        print(p.read_text())
+        return
+    if a.cmd in ("play", "try"):
+        if not a.rest:
+            die(f"{a.cmd} needs a clip")
+        clip = load(a.rest[0])
+        res = http("POST", f"/v1/bodies/{b}/play", {"clip": clip, "args": kv(a.rest[1:])})
+        print(json.dumps(res, indent=2)) if a.json else summarize(res)
+        return
+    if a.cmd == "stop":
+        res = http("POST", f"/v1/bodies/{b}/stop", {"clip": a.rest[0] if a.rest else None})
+        print(json.dumps(res, indent=2)) if a.json else summarize(res)
+        return
+    if a.cmd == "check":
+        res = http("POST", "/v1/clips/check", {"clip": load(a.rest[0]), "args": kv(a.rest[1:])})
+        print(json.dumps(res, indent=2))
+        return
+    if a.cmd == "save":
+        clip = load(a.rest[0])
+        if a.name:
+            clip["name"] = a.name
+        http("POST", "/v1/clips/check", {"clip": clip})  # dies with the error if bad
+        d = library()
+        d.mkdir(parents=True, exist_ok=True)
+        p = lib_path(d, clip.get("name"))
+        if p.exists() and not a.force:
+            die(f"{p} exists; --force to overwrite")
+        p.write_text(json.dumps(clip, indent=2) + "\n")
+        print(f"saved {p}")
+        return
+    if a.cmd == "fork":
+        src, _ = find(a.rest[0])
+        clip = json.loads(src.read_text())
+        clip["name"] = safe_name(a.as_ or clip.get("name"))
+        clip.setdefault("forked_from", a.rest[0])
+        d = library()
+        d.mkdir(parents=True, exist_ok=True)
+        p = lib_path(d, clip["name"])
+        if p.exists() and not a.force:
+            die(f"{p} exists; --force to overwrite")
+        p.write_text(json.dumps(clip, indent=2) + "\n")
+        print(f"forked {src} → {p}")
+        return
+    if a.cmd == "rm":
+        p = lib_path(library(), a.rest[0])
+        if not p.exists():
+            die(f"not in your library: {p}")
+        p.unlink()
+        print(f"removed {p}")
+        return
+    if a.cmd == "act":
+        cmd: dict = {"params": {k: float(v) for k, v in kv(a.rest).items()}}
+        if a.state:
+            cmd["state"] = a.state
+        if a.hold is not None:
+            cmd["hold_ms"] = a.hold
+        if a.release:
+            cmd["release"] = a.release.split(",")
+        print(json.dumps(http("POST", f"/v1/bodies/{b}/act", cmd), indent=2))
+        return
+    die(f"unknown command {a.cmd!r}; see --help")
+
+
+if __name__ == "__main__":
+    main()

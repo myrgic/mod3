@@ -123,6 +123,17 @@ jobs:
           console.log('Plugin manifest valid');
           "
 
+  test-dashboard-js:
+    name: Dashboard JS Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: node --test (no dependencies)
+        run: node --test tests/*.test.mjs
+
   public-release-gate:
     # Enforces .cogpublic via the org-level executor. mod3 has leaked twice
     # (#138/#142 personal names + absolute paths + private codename; #146 an
