@@ -38,12 +38,17 @@ class BusActResponse(_Base):
 
 
 class BusPerceiveResponse(_Base):
-    """POST /v1/bus/perceive response — filtered or decoded event."""
+    """POST /v1/bus/perceive response — filtered, non-speech, or decoded event."""
 
     status: str
     modality: str = ""
     channel: str = ""
     event: dict[str, Any] | None = None
+    # status == "non_speech": the shared ear classified the audio as music, noise or
+    # silence; it was not sent to STT and there is no transcript.
+    kind: str | None = None
+    confidence: float | None = None
+    confidences: dict[str, float] | None = None
 
 
 __all__ = ["BusActRequest", "BusActResponse", "BusPerceiveResponse"]

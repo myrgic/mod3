@@ -289,6 +289,22 @@ def _resolve_voice_via_bus(voice: str) -> str:
     raise ValueError(f"Unknown voice '{voice}'. Use /v1/voices to see options.")
 
 
+def _ear_gate_audio(audio, sample_rate: int):
+    """Run float32 mono ``audio`` through the voice module's gate (the shared ear).
+
+    Returns the GateResult, or None when no gate is registered. Used by the
+    endpoints that hand audio to STT so non-speech never reaches Whisper.
+    """
+    voice_module = _get_voice_module()
+    if voice_module is None or voice_module.gate is None:
+        return None
+    import numpy as np
+
+    raw = np.asarray(audio, dtype=np.float32).tobytes()
+    with _bus_vad_lock:
+        return voice_module.gate.check(raw, sample_rate=sample_rate, sample_width=4)
+
+
 def _read_wav_as_mono_float32(raw_wav: bytes) -> tuple[bytes, int]:
     import numpy as np
 
@@ -1076,6 +1092,23 @@ async def transcribe_audio(file: UploadFile):
         new_len = int(len(audio) * ratio)
         indices = np.linspace(0, len(audio) - 1, new_len)
         audio = np.interp(indices, np.arange(len(audio)), audio).astype(np.float32)
+
+    # Shared ear: only speech reaches Whisper. Music, noise and silence come back
+    # as a typed non-speech result, never as a transcript.
+    gate_result = _ear_gate_audio(audio, 16000)
+    if gate_result is not None and not gate_result.passed:
+        kind = gate_result.metadata.get("kind", "unknown")
+        logger.info("/v1/transcribe: gate stopped %.1fs of %s (not sent to STT)", duration_sec, kind)
+        return {
+            "transcript": "",
+            "language": "",
+            "duration_sec": round(duration_sec, 3),
+            "stt_ms": 0.0,
+            "non_speech": True,
+            "kind": kind,
+            "kind_confidence": gate_result.metadata.get("kind_confidence", 0.0),
+            "confidences": gate_result.metadata.get("confidences", {}),
+        }
 
     decoder = _get_stt_decoder()
 
@@ -2810,7 +2843,16 @@ def bus_health():
 async def bus_perceive(file: UploadFile, modality: str = "voice", channel: str = ""):
     """Run raw input through the modality bus: gate → decode → cognitive event."""
     raw = await file.read()
-    event = _bus.perceive(raw, modality=modality, channel=channel)
+    event, non_speech = _bus.perceive_outcome(raw, modality=modality, channel=channel)
+    if event is None and non_speech is not None:
+        return {
+            "status": "non_speech",
+            "modality": modality,
+            "channel": channel,
+            "kind": non_speech.metadata.get("kind"),
+            "confidence": non_speech.confidence,
+            "confidences": non_speech.metadata.get("confidences", {}),
+        }
     if event is None:
         return {"status": "filtered", "modality": modality, "channel": channel}
     return {

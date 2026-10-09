@@ -1,6 +1,6 @@
 """Voice modality module — the first non-trivial modality.
 
-Gate:    Silero VAD (is there speech?)
+Gate:    shared ear over Silero VAD (is this speech, music, noise or silence?)
 Decoder: WhisperDecoder — mlx_whisper STT with BoH hallucination filter
 Encoder: Mod³ TTS engines (Kokoro, Voxtral, Chatterbox, Spark)
 
@@ -17,6 +17,7 @@ import time
 
 import numpy as np
 
+from ear.gate import EarGate
 from modality import (
     CognitiveEvent,
     CognitiveIntent,
@@ -35,21 +36,24 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Gate: Silero VAD
+# Gate: shared ear (Silero VAD + music/noise/silence discrimination)
 # ---------------------------------------------------------------------------
 
 
-class VoiceGate(Gate):
-    """Voice activity detection gate using Silero VAD."""
+class VoiceGate(EarGate):
+    """Inbound voice gate: the shared ear decides, only ``kind=speech`` reaches STT.
 
-    def __init__(self, threshold: float = 0.5):
-        self.threshold = threshold
+    Silero VAD is still the speech evidence (the ear calls it), but speech
+    versus music, noise and silence is now decided up front, so an instrumental
+    or a noise bed is never handed to Whisper. If the ear itself errors, the
+    gate falls back to the plain Silero check this class used before.
+    """
 
-    def check(self, raw: bytes, **kwargs) -> GateResult:
+    def fallback_check(self, raw: bytes, **kwargs) -> GateResult | None:
         from vad import detect_speech
 
         sample_rate = kwargs.get("sample_rate", 16000)
-        sample_width = kwargs.get("sample_width", 2)
+        sample_width = kwargs.get("sample_width", 4)
 
         if sample_width == 2:
             audio = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
@@ -61,7 +65,7 @@ class VoiceGate(Gate):
         return GateResult(
             passed=result.has_speech,
             confidence=result.confidence,
-            reason=f"speech_ratio={result.speech_ratio} segments={result.num_segments}",
+            reason=f"speech_ratio={result.speech_ratio} segments={result.num_segments} (ear unavailable)",
             metadata={
                 "speech_ratio": result.speech_ratio,
                 "num_segments": result.num_segments,

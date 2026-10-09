@@ -70,6 +70,10 @@ def client(monkeypatch):
 
     mock_decoder = MockWhisperDecoder(transcript="test transcription", language="en")
     monkeypatch.setattr(http_api, "_stt_decoder", mock_decoder)
+    # These tests exercise request handling with a silent stand-in WAV; the shared
+    # ear (correctly) stops silence before STT, so bypass it here. Gate behaviour
+    # is covered in tests/test_ear.py.
+    monkeypatch.setattr(http_api, "_ear_gate_audio", lambda audio, sample_rate: None)
 
     from fastapi.testclient import TestClient
 
@@ -83,6 +87,10 @@ def client_hallucination(monkeypatch):
 
     mock_decoder = MockWhisperDecoder(transcript="", language="en", filtered=True)
     monkeypatch.setattr(http_api, "_stt_decoder", mock_decoder)
+    # These tests exercise request handling with a silent stand-in WAV; the shared
+    # ear (correctly) stops silence before STT, so bypass it here. Gate behaviour
+    # is covered in tests/test_ear.py.
+    monkeypatch.setattr(http_api, "_ear_gate_audio", lambda audio, sample_rate: None)
 
     from fastapi.testclient import TestClient
 
