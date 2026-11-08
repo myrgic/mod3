@@ -104,10 +104,10 @@ class WhisperDecoder(Decoder):
     def _ensure_model(self) -> None:
         """Trigger model download/load on first use."""
         if not self._loaded:
-            import mlx_whisper
+            import stt_backend
 
             logger.info("WhisperDecoder: loading model %s (first call)", self._model)
-            mlx_whisper.transcribe(
+            stt_backend.transcribe(
                 np.zeros(16000, dtype=np.float32),  # 1 s of silence
                 path_or_hf_repo=self._model,
             )
@@ -117,10 +117,10 @@ class WhisperDecoder(Decoder):
     def _ensure_base_model(self) -> None:
         """Load Whisper Base model for T1 fast transcription."""
         if not self._base_loaded:
-            import mlx_whisper
+            import stt_backend
 
             logger.info("WhisperDecoder: loading base model %s", self.BASE_MODEL)
-            mlx_whisper.transcribe(
+            stt_backend.transcribe(
                 np.zeros(16000, dtype=np.float32),
                 path_or_hf_repo=self.BASE_MODEL,
             )
@@ -135,7 +135,7 @@ class WhisperDecoder(Decoder):
     ) -> dict:
         """Chunked re-transcription with LocalAgreement-2 diff.
 
-        Re-runs mlx_whisper.transcribe() on the growing audio buffer,
+        Re-runs mlx_whisper.transcribe() (via stt_backend) on the growing audio buffer,
         diffs consecutive outputs to produce confirmed vs tentative text.
 
         Args:
@@ -150,8 +150,7 @@ class WhisperDecoder(Decoder):
               - tier: str — which tier was used
               - changed: bool — whether output differs from last run
         """
-        import mlx_whisper
-
+        import stt_backend
         from vad import is_hallucination
 
         # Select model based on tier
@@ -163,7 +162,7 @@ class WhisperDecoder(Decoder):
             model_path = self._model
 
         t0 = time.time()
-        result = mlx_whisper.transcribe(
+        result = stt_backend.transcribe(
             audio,
             path_or_hf_repo=model_path,
             language="en",
@@ -244,7 +243,7 @@ class WhisperDecoder(Decoder):
               - similarity: float — 0.0-1.0 word overlap ratio
               - elapsed_ms: float
         """
-        import mlx_whisper
+        import stt_backend
 
         self._ensure_base_model()
 
@@ -259,7 +258,7 @@ class WhisperDecoder(Decoder):
             audio_16k = audio_samples
 
         t0 = time.time()
-        result = mlx_whisper.transcribe(
+        result = stt_backend.transcribe(
             audio_16k,
             path_or_hf_repo=self.BASE_MODEL,
             language="en",
@@ -291,8 +290,7 @@ class WhisperDecoder(Decoder):
         }
 
     def decode(self, raw: bytes, **kwargs) -> CognitiveEvent:
-        import mlx_whisper
-
+        import stt_backend
         from vad import is_hallucination
 
         # Accept a numpy array directly via kwarg, or convert raw bytes.
@@ -302,7 +300,7 @@ class WhisperDecoder(Decoder):
 
         self._ensure_model()
 
-        result = mlx_whisper.transcribe(
+        result = stt_backend.transcribe(
             audio,
             path_or_hf_repo=self._model,
         )

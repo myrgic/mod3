@@ -32,6 +32,23 @@ Mod³ is a Python MCP server that provides text-to-speech for Claude Code, Curso
 
 Models are downloaded on first use via HuggingFace Hub.
 
+### Compute backends
+
+The backend is chosen at runtime by `MOD3_BACKEND=auto|mlx|cpu` (default `auto`: `mlx` on macOS, `cpu` everywhere else).
+
+| | `mlx` (Apple Silicon) | `cpu` (Linux / WSL / Windows) |
+|---|---|---|
+| TTS | mlx-audio: Kokoro, Voxtral, Chatterbox, Spark | Kokoro via [kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx) (onnxruntime, CPU) |
+| STT | mlx-whisper | faster-whisper (CTranslate2, int8) |
+| VAD | silero | silero (unchanged) |
+
+On the `cpu` backend the MLX-only engines (`voxtral`, `chatterbox`, `chatterbox-turbo`, `spark`, and any cloned-voice
+profile on them) report `"available": false` in `GET /v1/voices` and `"unavailable"` in `GET /v1/health`, and a request
+for one returns HTTP 400 `{"reason": "engine_unavailable_on_backend"}` immediately (nothing is loaded, nothing hangs).
+Install with `requirements-cpu.txt`. Knobs: `MOD3_KOKORO_ONNX_MODEL` / `MOD3_KOKORO_ONNX_VOICES` / `MOD3_KOKORO_ONNX_REPO`
+(default `onnx-community/Kokoro-82M-v1.0-ONNX` from the HF cache), `MOD3_STT_CPU_MODEL` (default `small`, ~1 s for a 2 s utterance on 12 cores;
+`deepdml/faster-whisper-large-v3-turbo-ct2` is ~4 s), `MOD3_STT_CPU_SMALL_MODEL`, `MOD3_STT_COMPUTE_TYPE`, `MOD3_STT_DEVICE`.
+
 ## Quick Start
 
 ```bash
@@ -164,9 +181,9 @@ The adaptive player is model-agnostic. Any TTS engine that produces audio chunks
 
 ## Requirements
 
-- macOS with Apple Silicon (M1/M2/M3/M4)
+- macOS with Apple Silicon (M1/M2/M3/M4) for the `mlx` backend, or any Linux/WSL/Windows box for the `cpu` backend (`requirements-cpu.txt`)
 - Python 3.12+
-- espeak-ng (`brew install espeak-ng`) -- required for Kokoro's phonemizer
+- espeak-ng (`brew install espeak-ng`) -- required for Kokoro's phonemizer on macOS (the cpu backend bundles espeak via `espeakng-loader`)
 
 ## Using Voice as a Modality
 

@@ -14,6 +14,9 @@ from typing import Iterator
 import numpy as np
 import pysbd
 
+import backend
+from backend import EngineUnavailable
+
 _segmenter = pysbd.Segmenter(language="en", clean=False)
 _log = logging.getLogger(__name__)
 
@@ -36,6 +39,60 @@ def _get_profile_registry():
             _log.warning("voice profile registry unavailable: %s", exc)
             return None
     return _profile_registry
+
+
+def voice_catalog(registry=None) -> dict[str, dict]:
+    """Single source of truth for "what voices exist".
+
+    Returns {engine_name: {model_id, voices, default_voice, supports,
+    custom_voices?}} where ``voices`` is the built-in preset list PLUS any
+    registered voice-clone profiles bound to that engine. Both the HTTP
+    ``GET /v1/voices`` handler and the MCP ``list_voices`` tool call this so
+    the two surfaces can never drift apart again.
+
+    Every engine carries ``available`` — False when the active compute backend
+    cannot run it (the MLX-only engines on the cpu backend; see backend.py) —
+    so a client can grey it out instead of finding out from a 4xx.
+
+    ``registry`` overrides the lazy module singleton — callers holding their
+    own VoiceProfileRegistry (and tests) pass theirs in.
+    """
+    engines: dict[str, dict] = {}
+    for name, cfg in MODELS.items():
+        supports = []
+        if cfg.get("supports_speed"):
+            supports.append("speed")
+        if cfg.get("supports_exaggeration"):
+            supports.append("emotion")
+        if cfg.get("supports_pitch"):
+            supports.append("pitch")
+        engines[name] = {
+            "model_id": cfg["id"],
+            "voices": list(cfg["voices"]),
+            "default_voice": cfg["default_voice"],
+            "supports": supports,
+            "available": backend.engine_available(name),
+        }
+        if not engines[name]["available"]:
+            engines[name]["unavailable_reason"] = (
+                f"needs the mlx backend (Apple Silicon); active backend is {backend.active_backend()!r}"
+            )
+
+    if registry is None:
+        registry = _get_profile_registry()
+    if registry is not None:
+        try:
+            profiles = registry.list()
+        except Exception as exc:  # pragma: no cover - defensive
+            _log.warning("voice profile listing failed: %s", exc)
+            profiles = []
+        for profile in profiles:
+            if profile.engine not in engines:
+                continue
+            engines[profile.engine]["voices"].append(profile.name)
+            engines[profile.engine].setdefault("custom_voices", []).append(profile.name)
+
+    return engines
 
 
 # ---------------------------------------------------------------------------
@@ -302,12 +359,22 @@ def get_model(engine: str):
 
     Stamps _last_use_ts so the idle-unload watcher knows when synthesis last
     happened. On a reload after eviction the load path runs again transparently.
+
+    Raises EngineUnavailable (before touching any model code) when the active
+    backend cannot run ``engine`` — see backend.py.
     """
+    if not backend.engine_available(engine):
+        raise EngineUnavailable(engine, backend.active_backend())
     with _model_lock:
         if engine not in _models:
-            from mlx_audio.tts import load
+            if backend.active_backend() == backend.CPU:
+                from tts_onnx import load_kokoro
 
-            _models[engine] = load(MODELS[engine]["id"])
+                _models[engine] = load_kokoro()
+            else:
+                from mlx_audio.tts import load
+
+                _models[engine] = load(MODELS[engine]["id"])
         if _idle_unload_enabled:
             global _last_use_ts
             _last_use_ts = time.time()
@@ -433,6 +500,7 @@ def generate_audio(
         for result in model.generate(**gen_kwargs):
             audio = np.array(result.audio).flatten().astype(np.float32)
             metadata = {
+                "engine": engine,
                 "gen_time_sec": round(result.processing_time_seconds, 4),
                 "rtf": round(result.real_time_factor, 2),
                 "samples": int(result.samples),

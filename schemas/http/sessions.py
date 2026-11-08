@@ -66,6 +66,18 @@ class SessionRegisterRequest(_Base):
     )
 
 
+class SessionVoiceRequest(_Base):
+    """PATCH /v1/sessions/{session_id}/voice — change a live session's voice.
+
+    ``POST /v1/sessions/register`` is idempotent on voice by design: it will
+    not reshuffle an already-assigned voice. This endpoint is the explicit
+    update path. It routes through ``SessionRegistry._allocate_voice`` so the
+    ``voice_conflict`` semantics are identical to initial registration.
+    """
+
+    voice: str = Field(description="Voice preset to assign (e.g. 'eng_uk_m_davids')")
+
+
 class SessionSubscribersResponse(_Base):
     """GET /v1/sessions/{session_id}/subscribers response."""
 
@@ -83,4 +95,9 @@ class SessionListResponse(_Base):
     voice_holders: Any = None
 
 
-__all__ = ["SessionListResponse", "SessionRegisterRequest", "SessionSubscribersResponse"]
+__all__ = [
+    "SessionListResponse",
+    "SessionRegisterRequest",
+    "SessionSubscribersResponse",
+    "SessionVoiceRequest",
+]

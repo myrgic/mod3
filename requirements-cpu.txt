@@ -1,0 +1,32 @@
+# Mod3 on the cpu backend (Linux / WSL / Windows; no MLX, no Apple Silicon).
+#
+# Install into a venv with the CPU torch wheel (the default PyPI wheel drags in ~6 GB of CUDA libraries that
+# nothing here uses; the CPU wheel keeps the venv near 1.6 GB):
+#   uv venv --python 3.12 venv
+#   uv pip install --python venv/bin/python -r requirements-cpu.txt \
+#       --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple \
+#       --index-strategy unsafe-best-match
+#
+# Selected at runtime by MOD3_BACKEND=auto|mlx|cpu (auto = cpu off Darwin); see backend.py.
+# On this backend TTS is Kokoro via kokoro-onnx, STT is faster-whisper, VAD is silero (torch, CPU).
+# The MLX-only engines (voxtral, chatterbox, chatterbox-turbo, spark) report available:false in /v1/voices.
+#
+# mcp is capped: mcp 2.x renamed FastMCP and breaks `from mcp.server.fastmcp import FastMCP` (jobs_registry.py).
+torch==2.10.0
+torchaudio==2.10.0
+kokoro-onnx>=0.6.1
+faster-whisper>=1.2.1
+huggingface-hub>=0.30
+mcp>=1.20.0,<2
+numpy>=2.0.0
+soundfile>=0.12.1
+scipy>=1.13.0
+pysbd>=0.3.4
+mistral-common>=1.0.0
+fastapi>=0.115.0
+uvicorn>=0.30.0
+httpx>=0.24.0
+python-multipart
+websockets>=12.0
+# sounddevice (local playback / mic capture) is optional: it needs the PortAudio system library and the HTTP
+# server runs without it. Install libportaudio2 + sounddevice only if you want server-side audio.

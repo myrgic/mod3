@@ -83,6 +83,12 @@ def _running_daemon(tmp_path, port: int):
             # Disabling it here would make the test fail for a reason that
             # has nothing to do with the topology bug under test.
             "MOD3_ADAPTIVE_BUFFER_PROBE": "0",  # never touch a real LM Studio
+            # Never open the operator's real speakers. This suite drives
+            # /v1/speak to get an in-flight job to poll, which used to make
+            # the machine audibly talk during a test run. The null stream
+            # keeps every playback metric intact (see adaptive_player's
+            # _NullOutputStream) while sending the samples nowhere.
+            "MOD3_SILENT_AUDIO": "1",
             "MOD3_BARGEIN_SIGNAL_PATH": str(tmp_path / "mod3-barge-in.json"),
             "MOD3_SPEAKING_LOCK_PATH": str(tmp_path / "mod3-speaking.json"),
         }

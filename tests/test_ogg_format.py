@@ -46,11 +46,19 @@ class TestSynthesizeRequestFormat:
         req = SynthesizeRequest(text="hello", format="pcm")
         assert req.format == "pcm"
 
-    def test_mp3_rejected(self):
+    def test_mp3_accepted(self):
+        """mp3 is a supported format — libsndfile encodes MPEG Layer III
+        natively, and chat transports inline mp3 but not ogg/opus."""
+        from schemas.http.synthesize import SynthesizeRequest
+
+        req = SynthesizeRequest(text="hello", format="mp3")
+        assert req.format == "mp3"
+
+    def test_unknown_format_rejected(self):
         from schemas.http.synthesize import SynthesizeRequest
 
         with pytest.raises(Exception):
-            SynthesizeRequest(text="hello", format="mp3")
+            SynthesizeRequest(text="hello", format="flac")
 
     def test_empty_format_rejected(self):
         from schemas.http.synthesize import SynthesizeRequest
@@ -223,8 +231,17 @@ class TestSynthesizeOggEndpoint:
         ct = r.headers.get("content-type", "")
         assert "audio/wav" in ct
 
-    def test_invalid_format_rejected_at_schema(self, client):
+    def test_mp3_format_returns_200(self, client):
         r = client.post("/v1/synthesize", json={"text": "hello", "format": "mp3"})
+        assert r.status_code == 200, r.text
+        ct = r.headers.get("content-type", "")
+        assert "audio/mpeg" in ct, f"expected audio/mpeg, got {ct!r}"
+        assert r.content[:2] in (b"\xff\xfb", b"\xff\xf3", b"\xff\xf2", b"ID"), (
+            f"bytes do not look like MP3: {r.content[:4]!r}"
+        )
+
+    def test_invalid_format_rejected_at_schema(self, client):
+        r = client.post("/v1/synthesize", json={"text": "hello", "format": "flac"})
         assert r.status_code == 422, f"Expected 422 Unprocessable Entity for invalid format, got {r.status_code}"
 
 

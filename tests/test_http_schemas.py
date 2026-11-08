@@ -57,7 +57,7 @@ class TestSynthesizeRequest:
 
     def test_invalid_format_rejected(self):
         with pytest.raises(Exception):
-            SynthesizeRequest(text="hello", format="mp3")
+            SynthesizeRequest(text="hello", format="flac")
 
     def test_session_id_passthrough(self):
         req = SynthesizeRequest(text="hi", session_id="sess-abc")

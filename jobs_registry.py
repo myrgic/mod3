@@ -158,6 +158,35 @@ def _model_registry() -> dict[str, dict[str, Any]]:
     return engine_module.MODELS if engine_module is not None else _MODEL_REGISTRY
 
 
+def _voice_catalog() -> dict[str, dict[str, Any]]:
+    """Shared voice catalog (built-ins + registered clone profiles).
+
+    Delegates to engine.voice_catalog() so the MCP list_voices tool and the
+    HTTP GET /v1/voices handler return the same voice set. Falls back to the
+    static registry shape only if the engine module cannot be imported.
+    """
+    engine_module, _ = _try_engine_module()
+    if engine_module is not None and hasattr(engine_module, "voice_catalog"):
+        return engine_module.voice_catalog()
+
+    catalog: dict[str, dict[str, Any]] = {}
+    for name, cfg in _model_registry().items():
+        supports = []
+        if cfg.get("supports_speed"):
+            supports.append("speed")
+        if cfg.get("supports_exaggeration"):
+            supports.append("emotion")
+        if cfg.get("supports_pitch"):
+            supports.append("pitch")
+        catalog[name] = {
+            "model_id": cfg.get("id"),
+            "voices": list(cfg["voices"]),
+            "default_voice": cfg.get("default_voice"),
+            "supports": supports,
+        }
+    return catalog
+
+
 def _adaptive_player_class():
     from adaptive_player import AdaptivePlayer
 
@@ -1734,17 +1763,10 @@ def list_voices() -> str:
     if _get_voice_module() is None:
         logger.warning("list_voices called without a registered bus voice module")
 
-    models = _model_registry()
+    models = _voice_catalog()
     lines = []
     for engine, cfg in models.items():
-        extras = []
-        if cfg.get("supports_speed"):
-            extras.append("speed")
-        if cfg.get("supports_exaggeration"):
-            extras.append("emotion")
-        if cfg.get("supports_pitch"):
-            extras.append("pitch")
-        tag = f" ({', '.join(extras)})" if extras else ""
+        tag = f" ({', '.join(cfg['supports'])})" if cfg.get("supports") else ""
         lines.append(f"  {engine}{tag}: {', '.join(cfg['voices'])}")
     return "Available voices:\n" + "\n".join(lines)
 
@@ -1969,7 +1991,10 @@ def register_session(
         participant_id: Identity of the speaker (e.g., 'cog', 'sandy', 'alice').
         participant_type: 'agent' or 'user'. Free-form beyond that.
         preferred_voice: Optional voice preset. If taken, voice_conflict=true
-                         is returned but assignment still succeeds.
+                         is returned but assignment still succeeds. Only honored
+                         on FIRST registration — for an existing session_id it
+                         is ignored and reported back as voice_ignored; use
+                         set_session_voice to change a live session's voice.
         preferred_output_device: 'system-default' (re-queried per playback),
                                  a device-name substring, or a numeric index.
     """
@@ -1984,6 +2009,12 @@ def register_session(
     payload = result.session.to_dict(device_resolver=resolve_output_device)
     payload["status"] = "ok"
     payload["created"] = result.created
+    if result.voice_ignored:
+        payload["voice_ignored"] = result.voice_ignored
+        payload["warning"] = (
+            f"preferred_voice {result.voice_ignored!r} ignored — session already assigned "
+            f"{result.session.assigned_voice!r}. Use set_session_voice to change it."
+        )
     # Also expose a live-resolved device at the top level for convenience —
     # callers can log or display it without walking nested keys.
     live = registry.resolve_device(result.session.session_id)
@@ -2003,6 +2034,36 @@ def deregister_session(session_id: str) -> str:
     """Release a session's voice and drop its pending jobs."""
     registry = get_default_registry()
     result = registry.deregister(session_id)
+    return json.dumps(result)
+
+
+@mcp.tool(
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    }
+)
+def set_session_voice(session_id: str, voice: str) -> str:
+    """Change an already-registered session's assigned voice.
+
+    ``register_session`` is idempotent and will NOT change the voice of a
+    session that already exists — it returns ``voice_ignored`` in that case.
+    This is the explicit update path. Conflict detection is identical to
+    initial registration: if another session already holds ``voice`` the
+    assignment still succeeds but ``voice_conflict=true`` is returned.
+
+    Args:
+        session_id: The session to retune (e.g. 'main').
+        voice: Voice preset to assign (e.g. 'eng_uk_m_davids').
+    """
+    registry = get_default_registry()
+    result = registry.set_voice(session_id, voice)
+    if result.get("status") == "ok":
+        session = registry.get(session_id)
+        if session is not None:
+            result["session"] = session.to_dict(device_resolver=resolve_output_device)
     return json.dumps(result)
 
 
