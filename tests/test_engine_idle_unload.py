@@ -35,6 +35,9 @@ def _fresh_engine_module(monkeypatch, idle_seconds: str = "0"):
     state is initialised at *import time* via _start_idle_unload_watcher_if_enabled().
     """
     monkeypatch.setenv("MOD3_TTS_IDLE_UNLOAD_SECONDS", idle_seconds)
+    # These tests fake mlx_audio.tts.load, i.e. the mlx backend's load path; pin it so they mean the same on
+    # Linux (where MOD3_BACKEND=auto would pick the cpu/ONNX backend).
+    monkeypatch.setenv("MOD3_BACKEND", "mlx")
     # Remove cached module so the next import re-runs module-level code.
     sys.modules.pop("engine", None)
     import engine as eng

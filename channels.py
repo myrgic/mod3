@@ -68,7 +68,7 @@ _INBOUND_FRAME_ADAPTER: TypeAdapter[InboundFrame] = TypeAdapter(InboundFrame)
 # ---------------------------------------------------------------------------
 # Dedicated STT executor — isolated from the asyncio default thread pool.
 #
-# mlx_whisper.transcribe() is 1-2s CPU-bound on the ANE/GPU.  Running it on
+# mlx_whisper.transcribe() (stt_backend.transcribe on the mlx backend) is 1-2s CPU-bound on the ANE/GPU.  Running it on
 # asyncio.to_thread() consumes a slot from the default pool, which is also
 # used by bus.act() drain threads and every other to_thread call in the
 # server.  Under concurrent load that starves those callers.
@@ -671,9 +671,9 @@ class BrowserChannel:
             import struct
             import tempfile
 
-            import mlx_whisper
             import numpy as np
 
+            import stt_backend
             from vad import is_hallucination
 
             audio = np.frombuffer(pcm_data, dtype=np.int16).astype(np.float32) / 32768.0
@@ -701,7 +701,7 @@ class BrowserChannel:
                 tmp_path = f.name
 
             try:
-                result = mlx_whisper.transcribe(
+                result = stt_backend.transcribe(
                     tmp_path,
                     path_or_hf_repo="mlx-community/whisper-large-v3-turbo",
                     language="en",

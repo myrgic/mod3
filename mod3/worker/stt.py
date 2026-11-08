@@ -100,15 +100,14 @@ def _handle_transcribe(request_id: str, data: dict) -> WireMessage:
         transcript = ""
         stt_ms = 1.0
     else:
-        import mlx_whisper
-
+        import stt_backend
         from vad import is_hallucination
 
         decoder = _get_decoder()
         decoder._ensure_model()
 
         t0 = time.perf_counter()
-        result = mlx_whisper.transcribe(
+        result = stt_backend.transcribe(
             audio,
             path_or_hf_repo=decoder._model,
             language=req.language,

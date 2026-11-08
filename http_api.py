@@ -53,8 +53,10 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketState
 
+import backend
 from _version import __version__
 from audio_subscribers import get_default_audio_subscribers
+from backend import EngineUnavailable, UnknownVoice
 from bus import ModalityBus
 from chat_flow_log import (
     CHAT_FAN_OUT,
@@ -245,9 +247,29 @@ async def _lifespan(application: FastAPI):
 
 app = FastAPI(
     title="Mod³",
-    description="Local multi-model TTS on Apple Silicon",
+    description="Local multi-model TTS, STT and VAD (MLX on Apple Silicon; ONNX/CPU elsewhere)",
     lifespan=_lifespan,
 )
+
+
+@app.exception_handler(EngineUnavailable)
+async def _engine_unavailable_handler(request: Request, exc: EngineUnavailable):
+    """An MLX-only engine was asked for on the cpu backend: a clear 4xx, raised before any model load."""
+    return JSONResponse(
+        status_code=400,
+        content={
+            "error": str(exc),
+            "engine": exc.engine,
+            "backend": exc.backend,
+            "reason": "engine_unavailable_on_backend",
+        },
+    )
+
+
+@app.exception_handler(UnknownVoice)
+async def _unknown_voice_handler(request: Request, exc: UnknownVoice):
+    """A voice the serving engine does not have (e.g. a name that is not in the packed kokoro voice file)."""
+    return JSONResponse(status_code=400, content={"error": str(exc), "reason": "unknown_voice"})
 
 
 try:
@@ -822,6 +844,12 @@ def audio_speech(req: SpeechRequest):
             registry.submit(session_id, {"type": "audio_speech", "text": req.input[:200]})
         except Exception as exc:  # noqa: BLE001
             logger.debug("session submit accounting failed: %s", exc)
+
+    # `model` has always been advisory here, so it still is. The one exception is a model that names an engine
+    # this backend cannot run (chatterbox-turbo on the cpu backend): speaking that request in a different
+    # voice would be a lie, so refuse it. On the mlx backend every engine is available and this never fires.
+    if req.model in MODELS and not backend.engine_available(req.model):
+        raise EngineUnavailable(req.model, backend.active_backend())
 
     voice = req.voice
     try:
@@ -1750,6 +1778,15 @@ def speak_enqueue(req: SpeakRequest):
     """
     if not req.text.strip():
         return JSONResponse(status_code=400, content={"error": "text required"})
+    # Fail a voice this backend cannot speak now, as a 4xx, instead of queueing a job that errors later.
+    try:
+        from engine import resolve_model
+
+        _engine_name, _ = resolve_model(req.voice)
+    except ValueError:
+        _engine_name = None  # unknown voice: keep the existing queue-time behaviour
+    if _engine_name is not None and not backend.engine_available(_engine_name):
+        raise EngineUnavailable(_engine_name, backend.active_backend())
     try:
         from jobs_registry import _start_speech, check_bargein_gate
 
@@ -2645,6 +2682,14 @@ async def chat_flow_log_stream(
     )
 
 
+def _stt_available() -> bool:
+    if backend.active_backend() == backend.CPU:
+        import importlib.util
+
+        return importlib.util.find_spec("faster_whisper") is not None
+    return True
+
+
 @app.get("/health")
 @app.get("/v1/health")
 def health():
@@ -2660,7 +2705,10 @@ def health():
         # Engine status: loaded/unloaded for each registered engine
         engines = {}
         for engine_name in MODELS:
-            engines[engine_name] = "loaded" if engine_name in loaded else "unloaded"
+            if not backend.engine_available(engine_name):
+                engines[engine_name] = "unavailable"  # MLX-only engine on the cpu backend
+            else:
+                engines[engine_name] = "loaded" if engine_name in loaded else "unloaded"
 
         # Modality availability
         modalities = {
@@ -2670,7 +2718,8 @@ def health():
             # first request), so report it as such — this key read False
             # long after the endpoint shipped, which made /health disagree
             # with /capabilities about a working feature.
-            "stt": True,
+            # (On the cpu backend that means faster-whisper is installed.)
+            "stt": _stt_available(),
             "vad": vad_loaded(),
         }
 
@@ -2687,6 +2736,7 @@ def health():
             "service": "mod3",
             "version": __version__,
             "uptime_sec": round(time.time() - _server_start_time, 1),
+            "backend": backend.active_backend(),
             "engines": engines,
             "modalities": modalities,
             "queue": {
@@ -2767,22 +2817,27 @@ async def shutdown(req: Optional[ShutdownRequest] = None):
 @app.get("/capabilities")
 def capabilities():
     """Machine-readable capability manifest for service discovery."""
+    import stt_backend
+
+    stt = stt_backend.engine_info()
     voices = {name: cfg["voices"] for name, cfg in MODELS.items()}
     return {
         "service": "mod3",
         "version": __version__,
-        "description": "Model Modality Modulator — local TTS, STT, and VAD on Apple Silicon",
+        "backend": backend.active_backend(),
+        "description": "Model Modality Modulator — local TTS, STT, and VAD (MLX on Apple Silicon, ONNX/CPU elsewhere)",
         "modalities": ["voice"],
         "capabilities": {
             "tts": {
                 "engines": list(MODELS.keys()),
+                "available_engines": [n for n in MODELS if backend.engine_available(n)],
                 "default_voice": "bm_lewis",
                 "default_speed": 1.25,
                 "endpoint": "/v1/synthesize",
             },
             "stt": {
-                "engine": "mlx_whisper",
-                "model": "mlx-community/whisper-large-v3-turbo",
+                "engine": stt["engine"],
+                "model": stt["model"],
                 "languages": ["en"],
                 "endpoint": "/v1/transcribe",
             },
