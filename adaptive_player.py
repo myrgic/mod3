@@ -144,6 +144,7 @@ class _NullOutputStream:
     def close(self):
         self.stop()
 
+
 # ---------------------------------------------------------------------------
 # Buffer policy — pure functions (inputs -> buffer_ms). Unit-tested in
 # tests/test_buffer_policy.py; nothing here touches audio hardware or state.
