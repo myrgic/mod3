@@ -27,5 +27,6 @@ fastapi>=0.115.0
 uvicorn>=0.30.0
 httpx>=0.24.0
 python-multipart
+websockets>=12.0
 # sounddevice (local playback / mic capture) is optional: it needs the PortAudio system library and the HTTP
 # server runs without it. Install libportaudio2 + sounddevice only if you want server-side audio.
