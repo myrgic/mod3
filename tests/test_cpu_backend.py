@@ -277,6 +277,16 @@ class TestHttpOnCpu:
         assert r.status_code == 400, r.text
         assert "chatterbox" in r.json()["error"]
 
+    def test_profile_registration_on_an_mlx_only_engine_is_a_400(self, http, tmp_path):
+        ref = tmp_path / "ref.wav"
+        ref.write_bytes(b"RIFF")
+        r = http.post(
+            "/v1/voices/profiles",
+            json={"name": "nobody-cpu-test", "ref_audio_path": str(ref), "engine": "chatterbox-turbo"},
+        )
+        assert r.status_code == 400, r.text
+        assert r.json()["reason"] == "engine_unavailable_on_backend"
+
     def test_speak_refuses_a_voxtral_voice_with_400_and_queues_nothing(self, http):
         r = http.post("/v1/speak", json={"text": "hi", "voice": "casual_male"})
         assert r.status_code == 400, r.text
