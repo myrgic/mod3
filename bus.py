@@ -151,7 +151,28 @@ class ModalityBus:
     ) -> CognitiveEvent | None:
         """Process raw input through gate → decoder → cognitive event.
 
-        Returns None if the gate rejected the input.
+        Returns None if the gate rejected the input. When the gate is the shared
+        ear and it heard music, noise or silence, a ``modality.non_speech`` bus
+        event records what it was (kind, confidence); use
+        :meth:`perceive_outcome` to get that as a CognitiveEvent.
+        """
+        return self.perceive_outcome(raw, modality, channel, **kwargs)[0]
+
+    def perceive_outcome(
+        self,
+        raw: bytes,
+        modality: str | ModalityType,
+        channel: str = "",
+        **kwargs,
+    ) -> tuple[CognitiveEvent | None, CognitiveEvent | None]:
+        """Like :meth:`perceive`, but also reports why a gate rejected the input.
+
+        Returns ``(event, non_speech)``. ``event`` is the decoded transcript (or
+        None). ``non_speech`` is set only when the gate rejected input it
+        classified as something other than speech: a CognitiveEvent with empty
+        ``content`` and ``metadata["non_speech"] = True``, ``metadata["kind"]``
+        and the ear's reading. It is never a transcript and never reaches the
+        decoder.
         """
         mod_type = ModalityType(modality) if isinstance(modality, str) else modality
         module = self._modules.get(mod_type)
@@ -170,7 +191,38 @@ class ModalityBus:
                 )
             )
             if not gate_result.passed:
-                return None
+                kind = gate_result.metadata.get("kind")
+                if kind and kind != "speech":
+                    non_speech = CognitiveEvent(
+                        modality=mod_type,
+                        content="",
+                        source_channel=channel,
+                        confidence=float(gate_result.metadata.get("kind_confidence", 0.0)),
+                        metadata={
+                            "non_speech": True,
+                            "kind": kind,
+                            "confidences": gate_result.metadata.get("confidences", {}),
+                            "reading": gate_result.metadata.get("reading", {}),
+                            "decoder": None,
+                        },
+                    )
+                    logger.info(
+                        "gate stopped %s input on %s: %s (confidence %.2f); decoder not called",
+                        mod_type.value,
+                        channel or "?",
+                        kind,
+                        non_speech.confidence,
+                    )
+                    self._emit(
+                        BusEvent(
+                            "modality.non_speech",
+                            mod_type.value,
+                            channel,
+                            {"kind": kind, "confidence": non_speech.confidence},
+                        )
+                    )
+                    return None, non_speech
+                return None, None
 
         # Decode
         if module.decoder is None:
@@ -188,7 +240,7 @@ class ModalityBus:
                     event.metadata,
                 )
             )
-            return None
+            return None, None
 
         event.source_channel = channel
         self._emit(
@@ -199,7 +251,7 @@ class ModalityBus:
                 {"content": event.content[:200], "confidence": event.confidence},
             )
         )
-        return event
+        return event, None
 
     # -- Action (output) --
 
