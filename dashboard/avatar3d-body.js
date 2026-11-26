@@ -86,6 +86,10 @@ export class Avatar3DBody {
    * receipt or a render frame so both see the same, current values -- never read channels[ch].value
    * directly without calling this first. */
   _apply() {
+    // Reset every channel to rest (0) FIRST -- otherwise a released or hold_ms-expired param leaves a
+    // stale value behind forever (real bug, caught by review: act({params:{"head.x":.5}}) then
+    // act({release:["head.x"]}) left semantic["head.x"] at 0.5 with nothing in `held` to explain it).
+    for (const ch of Object.keys(this.channels)) this.channels[ch].value = 0;
     this.channels["mouth.open"].value = Math.max(0, Math.min(1, this.mouthLevel));
     for (const [ch, v] of this.held) {
       if (ch in this.channels) this.channels[ch].value = v;
@@ -116,6 +120,11 @@ export class Avatar3DBody {
   }
 
   receipt(cmd = {}) {
+    // receipt() is the protocol's source of truth (play()/stop() call it directly, not through
+    // act()/renderFrame()) -- it must apply the current state itself rather than trust a caller to
+    // have called _apply() first (real bug, caught by review: play()/stop() returned a stale
+    // mouth.open because nothing upstream of them called _apply()).
+    this._apply();
     const all_semantic = {};
     for (const ch of Object.keys(this.channels)) all_semantic[ch] = round(this.channels[ch].value);
     return { state: this.state, held: Object.fromEntries(this.held), semantic: all_semantic, clips: [], t: Date.now() };

@@ -75,12 +75,33 @@ await asyncTest("act() sets state and holds a param, which appears in both held 
   assert.equal(r.semantic["mouth.smile"], 0.5);
 });
 
-await asyncTest("act() release clears a held param from both held and semantic", async () => {
+await asyncTest("act() release clears a held param from both held AND semantic (not just held)", async () => {
+  // Real bug caught by review: the original fix applied held values but never reset a released
+  // channel back to rest, so `held` was correctly empty while `semantic` kept the stale value.
   const b = new Avatar3DBody();
   await b.act({ params: { "mouth.smile": 0.5 } });
   await b.act({ release: ["mouth.smile"] });
   const r = b.receipt();
   assert.ok(!("mouth.smile" in r.held));
+  assert.equal(r.semantic["mouth.smile"], 0, "a released channel must return to rest, not stay stale");
+});
+
+await asyncTest("a hold_ms-expired param returns to rest, not a stale value", async () => {
+  const b = new Avatar3DBody();
+  await b.act({ params: { "head.y": 0.3 }, hold_ms: 10 });
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(b.receipt().semantic["head.y"], 0, "an expired hold_ms timer must not leave a stale value");
+});
+
+await asyncTest("play()/stop() reflect live mouthLevel, not a stale value from before _apply ran", async () => {
+  // Real bug caught by review: receipt() didn't call _apply() itself, so play()/stop() (which call
+  // receipt() directly, not through act()/renderFrame()) returned a stale mouth.open.
+  const b = new Avatar3DBody();
+  b.mouthLevel = 0.7;
+  const p = await b.play({ clip: { name: "x" } });
+  assert.equal(p.semantic["mouth.open"], 0.7);
+  const s = await b.stop({ clip: { name: "x" } });
+  assert.equal(s.semantic["mouth.open"], 0.7);
 });
 
 await asyncTest("act() ignores an unknown channel name rather than throwing", async () => {
