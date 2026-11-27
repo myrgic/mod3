@@ -1,0 +1,22 @@
+{
+  "kind": "three",
+  "runtime": "three.js (phase 1 scaffold: placeholder geometry, no rig)",
+  "states": ["IDLE", "DANCING", "VIBING", "EXCITED", "LEANING_FORWARD", "PRETENDING_NOT_TO_NOTICE", "REFUSING_TO_LOOK"],
+  "params": [
+    {"id": "head.x", "min": -1, "max": 1, "default": 0},
+    {"id": "head.y", "min": -1, "max": 1, "default": 0},
+    {"id": "head.z", "min": -1, "max": 1, "default": 0},
+    {"id": "body.x", "min": -1, "max": 1, "default": 0},
+    {"id": "body.y", "min": -1, "max": 1, "default": 0},
+    {"id": "body.z", "min": -1, "max": 1, "default": 0},
+    {"id": "eyes.x", "min": -1, "max": 1, "default": 0},
+    {"id": "eyes.y", "min": -1, "max": 1, "default": 0},
+    {"id": "eyes.open", "min": 0, "max": 1, "default": 0},
+    {"id": "mouth.open", "min": 0, "max": 1, "default": 0},
+    {"id": "mouth.smile", "min": -1, "max": 1, "default": 0},
+    {"id": "brows.y", "min": -1, "max": 1, "default": 0},
+    {"id": "brows.angle", "min": -1, "max": 1, "default": 0},
+    {"id": "cheek", "min": 0, "max": 1, "default": 0},
+    {"id": "breath", "min": 0, "max": 1, "default": 0}
+  ]
+}

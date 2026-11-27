@@ -63,6 +63,12 @@ export class Avatar3DBody {
       kind: "three",
       runtime: "three.js (phase 1 scaffold: placeholder geometry, no rig)",
       states: STATES,
+      // body.py's validate_command() only forwards act params whose id is listed here (with min/max).
+      // The param ids ARE the semantic channel names: this body's act() is keyed by channel, so the
+      // namespace stays one thing (channel name) end to end. Ranges come from polarity: bi -1..1, uni 0..1.
+      params: Object.entries(SEMANTIC_CHANNELS).map(([id, polarity]) => ({
+        id, min: polarity === "bi" ? -1 : 0, max: 1, default: 0,
+      })),
       semantic_channels: this.channels,
       clip_generators: ["const", "keys", "wave", "jitter", "follow"],
       lip_sync: true,                 // env-driven mouth.open; cue-driven visemes await phase 2's rig.json
@@ -103,12 +109,23 @@ export class Avatar3DBody {
     return { "mouth.open": this.channels["mouth.open"].value };
   }
 
+  /** Clamp a requested value to the channel's declared range (same as live2d-body.js's clamp()).
+   * Returns null for a non-finite value, so NaN/Infinity never reach `held` or the receipt. */
+  _clamp(ch, v) {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return null;
+    const { min, max } = this.channels[ch].polarity === "bi" ? { min: -1, max: 1 } : { min: 0, max: 1 };
+    return Math.min(max, Math.max(min, n));
+  }
+
   /** Apply an `act` command; returns the receipt -- same shape/semantics as live2d-body.js's act(). */
   async act(cmd) {
     if (cmd.state && STATES.includes(cmd.state)) this.setState(cmd.state);
-    for (const [ch, v] of Object.entries(cmd.params || {})) {
+    for (const [ch, raw] of Object.entries(cmd.params || {})) {
       if (!(ch in this.channels)) continue;
-      this.held.set(ch, Number(v));
+      const v = this._clamp(ch, raw);
+      if (v === null) continue;
+      this.held.set(ch, v);
       clearTimeout(this.holdTimers.get(ch));
       if (cmd.hold_ms != null) {
         this.holdTimers.set(ch, setTimeout(() => this.held.delete(ch), Math.max(0, Number(cmd.hold_ms) || 0)));
