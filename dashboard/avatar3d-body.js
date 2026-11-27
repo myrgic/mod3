@@ -90,28 +90,49 @@ export class Avatar3DBody {
    * yet apply it to any morph (no rig = no morph targets) -- env-driven mouth.open via mouthLevel is the
    * only real behavior today, exactly the same whether cues is empty or populated. This method must never
    * throw: pad.js calls it inside a try/catch, but a body that breaks its own call contract is still a bug. */
-  speak({ cues = [], env = [], hop_ms = 20, t0 = null, audio = null } = {}) {
+  speak(opts) {
+    // Every field is caller input: read each one defensively (a getter may throw; a Symbol/BigInt throws in
+    // arithmetic). A time or duration counts only if it is already a finite number -- no coercion, so null, "",
+    // true and false are never read as t=0/1 (review of 15cf7b0).
+    const get = (o, k, d) => { try { const v = o == null ? undefined : o[k]; return v === undefined ? d : v; } catch (e) { return d; } };
+    const num = (v) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+    const cues = get(opts, "cues", []), env = get(opts, "env", []), audio = get(opts, "audio", null);
+    const hop = num(get(opts, "hop_ms", 20)), t0 = num(get(opts, "t0", null));
     // Phase 2 (the Digi-el view): server cues win; with none, a body that has an analyser (this.lipsync, set by the
     // scene: lipsync.js) makes its own from the decoded line pad.js hands over (`audio`, an AudioBuffer). Cues are kept
     // as [[t_ms, shape], ...] sorted by time, whichever source they came from.
-    // A malformed element (null, a number, a string) is dropped, never thrown on: this method must never throw.
+    // A malformed element (null, a number, a string, a wrong-typed time) is dropped, never thrown on.
     const toCue = (c) => {
-      if (Array.isArray(c)) return [Number(c[0]), String(c[1])];
-      if (c && typeof c === "object") return [Number(c.t) * 1000, String(c.s)];
+      try {
+        if (Array.isArray(c)) { const t = num(c[0]); return t === null ? null : [t, String(c[1])]; }
+        if (c && typeof c === "object") { const s = num(c.t); return s === null ? null : [s * 1000, String(c.s)]; }
+      } catch (e) { /* unusable cue element */ }
       return null;
     };
-    let list = Array.isArray(cues) && cues.length ? cues.map(toCue).filter(Boolean) : null;
-    if (list && !list.length) list = null;
-    let source = list ? "server" : "env";
+    let list = null, source = "env";
+    try {
+      const fromServer = Array.isArray(cues) ? cues.map(toCue).filter(Boolean) : [];
+      if (fromServer.length) { list = fromServer; source = "server"; }
+    } catch (e) { list = null; }
     if (!list && audio && typeof this.lipsync === "function") {
       try {
+        // The analyser's cues go through the same toCue (seconds -> ms, finite number times only) as the server's,
+        // so a timeline it returns with no usable element is no timeline: source stays "env".
         const made = this.lipsync(audio.getChannelData(0), audio.sampleRate);
-        if (made && made.length) { list = made.map((c) => [c.t * 1000, c.s]); source = "analyser"; }
+        const usable = Array.isArray(made) ? made.map(toCue).filter(Boolean) : [];
+        if (usable.length) { list = usable; source = "analyser"; }
       } catch (e) { list = null; }
     }
-    this._cuesActive = list ? list.filter((c) => Number.isFinite(c[0])).sort((a, b) => a[0] - b[0]) : null;
+    this._cuesActive = list && list.length ? list.sort((a, b) => a[0] - b[0]) : null;
+    if (!this._cuesActive) source = "env";
     this._speakT0 = t0;
-    this._speakDur = Array.isArray(env) && env.length ? env.length * (hop_ms || 20) : (audio ? audio.duration * 1000 : 0);
+    let dur = 0;
+    try {
+      const n = Array.isArray(env) ? env.length : 0;
+      const aDur = audio ? num(get(audio, "duration", null)) : null;
+      dur = n ? n * (hop && hop > 0 ? hop : 20) : (aDur !== null && aDur > 0 ? aDur * 1000 : 0);
+    } catch (e) { dur = 0; }
+    this._speakDur = dur;
     this.cueSource = source;
     return { ok: true, cues_received: this._cuesActive ? this._cuesActive.length : 0, fallback: this._cuesActive ? null : "env", source };
   }
@@ -121,7 +142,9 @@ export class Avatar3DBody {
   cueAt(now, ahead = 35) {
     const cues = this._cuesActive;
     if (!cues || this._speakT0 == null) return "X";
-    const t = now - this._speakT0 + ahead;
+    if (typeof now !== "number" || !Number.isFinite(now)) return "X";
+    const lead = typeof ahead === "number" && Number.isFinite(ahead) ? ahead : 35;
+    const t = now - this._speakT0 + lead;
     if (t < 0 || t > this._speakDur + 200) return "X";
     let s = "X";
     for (let i = 0; i < cues.length && cues[i][0] <= t; i++) s = cues[i][1];
@@ -165,7 +188,8 @@ export class Avatar3DBody {
   /** Clamp a requested value to the channel's declared range (same as live2d-body.js's clamp()).
    * Returns null for a non-finite value, so NaN/Infinity never reach `held` or the receipt. */
   _clamp(ch, v) {
-    const n = Number(v);
+    let n;
+    try { n = Number(v); } catch (e) { return null; }   // a Symbol/BigInt throws in Number(): treat as non-finite
     if (!Number.isFinite(n)) return null;
     const { min, max } = this.channels[ch].polarity === "bi" ? { min: -1, max: 1 } : { min: 0, max: 1 };
     return Math.min(max, Math.max(min, n));
@@ -181,7 +205,9 @@ export class Avatar3DBody {
       this.held.set(ch, v);
       clearTimeout(this.holdTimers.get(ch));
       if (cmd.hold_ms != null) {
-        this.holdTimers.set(ch, setTimeout(() => this.held.delete(ch), Math.max(0, Number(cmd.hold_ms) || 0)));
+        let ms = 0;
+        try { ms = Math.max(0, Number(cmd.hold_ms) || 0); } catch (e) { ms = 0; }   // Symbol/BigInt: no hold delay
+        this.holdTimers.set(ch, setTimeout(() => this.held.delete(ch), ms));
       }
     }
     for (const ch of cmd.release || []) { this.held.delete(ch); clearTimeout(this.holdTimers.get(ch)); }
