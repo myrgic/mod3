@@ -94,7 +94,14 @@ export class Avatar3DBody {
     // Phase 2 (the Digi-el view): server cues win; with none, a body that has an analyser (this.lipsync, set by the
     // scene: lipsync.js) makes its own from the decoded line pad.js hands over (`audio`, an AudioBuffer). Cues are kept
     // as [[t_ms, shape], ...] sorted by time, whichever source they came from.
-    let list = Array.isArray(cues) && cues.length ? cues.map((c) => Array.isArray(c) ? [Number(c[0]), String(c[1])] : [Number(c.t) * 1000, String(c.s)]) : null;
+    // A malformed element (null, a number, a string) is dropped, never thrown on: this method must never throw.
+    const toCue = (c) => {
+      if (Array.isArray(c)) return [Number(c[0]), String(c[1])];
+      if (c && typeof c === "object") return [Number(c.t) * 1000, String(c.s)];
+      return null;
+    };
+    let list = Array.isArray(cues) && cues.length ? cues.map(toCue).filter(Boolean) : null;
+    if (list && !list.length) list = null;
     let source = list ? "server" : "env";
     if (!list && audio && typeof this.lipsync === "function") {
       try {
