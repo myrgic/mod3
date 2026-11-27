@@ -42,11 +42,12 @@ test("speak() with no cues falls back to env (the only real behavior today)", ()
   assert.equal(r.cues_received, 0);
 });
 
-test("speak() with real cues records them, still reports the env fallback (no rig to drive visemes yet)", () => {
+test("speak() with real cues records them and reports source=server (phase 2: no env fallback)", () => {
   const b = new Avatar3DBody();
   const r = b.speak({ cues: [[0, "X"], [100, "B"]], env: [], hop_ms: 20, t0: 2000 });
   assert.equal(r.cues_received, 2);
-  assert.equal(r.fallback, "env");
+  assert.equal(r.fallback, null);
+  assert.equal(r.source, "server");
 });
 
 test("speak() never throws on a missing/malformed argument", () => {

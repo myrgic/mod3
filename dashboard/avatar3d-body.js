@@ -35,6 +35,8 @@ const SEMANTIC_CHANNELS = {
   "cheek": "uni", "breath": "uni",
 };
 
+export const MOODS = ["neutral", "happy", "surprised", "annoyed", "sad"];
+
 const round = (v) => Math.round(v * 1000) / 1000;
 
 export class Avatar3DBody {
@@ -55,14 +57,21 @@ export class Avatar3DBody {
     // render-agnostic so it is testable without a WebGL context.
     this._cuesActive = null;        // the current speak() cue timeline, or null (env-only fallback)
     this._speakT0 = null;
+    this._speakDur = 0;
+    this.cueSource = "env";
+    this.mood = "happy";
+    this.lastGesture = null;
+    this.lipsync = null;            // (samples, sampleRate) -> [{t, s}]; set by a scene that has an analyser
+    this.rig = null;                // the loaded pack's rig (pack.json), set by the scene
   }
 
   /** Mod3 body protocol: declared on /ws/body/{id} hello (same wire shape as live2d-body.js). */
   manifest() {
     return {
       kind: "three",
-      runtime: "three.js (phase 1 scaffold: placeholder geometry, no rig)",
+      runtime: this.rig ? "three.js (avatar pack: " + (this.rig.id || "?") + ")" : "three.js (phase 1 scaffold: placeholder geometry, no rig)",
       states: STATES,
+      moods: MOODS,
       // body.py's validate_command() only forwards act params whose id is listed here (with min/max).
       // The param ids ARE the semantic channel names: this body's act() is keyed by channel, so the
       // namespace stays one thing (channel name) end to end. Ranges come from polarity: bi -1..1, uni 0..1.
@@ -71,8 +80,8 @@ export class Avatar3DBody {
       })),
       semantic_channels: this.channels,
       clip_generators: ["const", "keys", "wave", "jitter", "follow"],
-      lip_sync: true,                 // env-driven mouth.open; cue-driven visemes await phase 2's rig.json
-      rig: null,                      // phase 2: the loaded rig.json's bone/morph map, once an avatar pack exists
+      lip_sync: true,                 // env-driven mouth.open; with a pack, A-H visemes from cues (server or analyser)
+      rig: this.rig,                  // the loaded pack.json (shapes, moods, bones), or null with no pack
     };
   }
 
@@ -81,10 +90,47 @@ export class Avatar3DBody {
    * yet apply it to any morph (no rig = no morph targets) -- env-driven mouth.open via mouthLevel is the
    * only real behavior today, exactly the same whether cues is empty or populated. This method must never
    * throw: pad.js calls it inside a try/catch, but a body that breaks its own call contract is still a bug. */
-  speak({ cues = [], env = [], hop_ms = 20, t0 = null } = {}) {
-    this._cuesActive = Array.isArray(cues) && cues.length ? cues : null;
+  speak({ cues = [], env = [], hop_ms = 20, t0 = null, audio = null } = {}) {
+    // Phase 2 (the Digi-el view): server cues win; with none, a body that has an analyser (this.lipsync, set by the
+    // scene: lipsync.js) makes its own from the decoded line pad.js hands over (`audio`, an AudioBuffer). Cues are kept
+    // as [[t_ms, shape], ...] sorted by time, whichever source they came from.
+    let list = Array.isArray(cues) && cues.length ? cues.map((c) => Array.isArray(c) ? [Number(c[0]), String(c[1])] : [Number(c.t) * 1000, String(c.s)]) : null;
+    let source = list ? "server" : "env";
+    if (!list && audio && typeof this.lipsync === "function") {
+      try {
+        const made = this.lipsync(audio.getChannelData(0), audio.sampleRate);
+        if (made && made.length) { list = made.map((c) => [c.t * 1000, c.s]); source = "analyser"; }
+      } catch (e) { list = null; }
+    }
+    this._cuesActive = list ? list.filter((c) => Number.isFinite(c[0])).sort((a, b) => a[0] - b[0]) : null;
     this._speakT0 = t0;
-    return { ok: true, cues_received: this._cuesActive ? this._cuesActive.length : 0, fallback: "env" };
+    this._speakDur = Array.isArray(env) && env.length ? env.length * (hop_ms || 20) : (audio ? audio.duration * 1000 : 0);
+    this.cueSource = source;
+    return { ok: true, cues_received: this._cuesActive ? this._cuesActive.length : 0, fallback: this._cuesActive ? null : "env", source };
+  }
+
+  /** The mouth shape at `now` (performance.now() ms, pad.js's clock), looking `ahead` ms early (shapes lead the
+   * sound slightly). "X" (rest) outside a line or with no cue timeline. */
+  cueAt(now, ahead = 35) {
+    const cues = this._cuesActive;
+    if (!cues || this._speakT0 == null) return "X";
+    const t = now - this._speakT0 + ahead;
+    if (t < 0 || t > this._speakDur + 200) return "X";
+    let s = "X";
+    for (let i = 0; i < cues.length && cues[i][0] <= t; i++) s = cues[i][1];
+    return s;
+  }
+
+  /** Mood: a face held on top of everything else (happy, surprised, annoyed, sad, neutral). The scene reads it. */
+  setMood(m) {
+    if (MOODS.includes(m)) this.mood = m;
+    return this.mood;
+  }
+
+  /** A room gesture (speech.py gesture(): "nod" when Cog answers, "think" while it works). */
+  gesture(clip) {
+    this.lastGesture = { clip: String(clip || ""), t: Date.now() };
+    return this.lastGesture;
   }
 
   /** Writes the procedural + held layers into every channel's displayed value, held winning (same
@@ -144,7 +190,7 @@ export class Avatar3DBody {
     this._apply();
     const all_semantic = {};
     for (const ch of Object.keys(this.channels)) all_semantic[ch] = round(this.channels[ch].value);
-    return { state: this.state, held: Object.fromEntries(this.held), semantic: all_semantic, clips: [], t: Date.now() };
+    return { state: this.state, mood: this.mood, held: Object.fromEntries(this.held), semantic: all_semantic, clips: [], t: Date.now() };
   }
 
   /** Clips: phase 1 has no ClipPlayer wired up (no rig to drive beyond mouth.open) -- stub that answers
